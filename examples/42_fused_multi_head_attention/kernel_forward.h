@@ -115,6 +115,7 @@ struct AttentionKernel {
     int32_t q_strideM;
     int32_t k_strideM;
     int32_t v_strideM;
+    int32_t o_strideM;
 
     // Everything below is only used in `advance_to_block`
     // and shouldn't use registers
@@ -129,9 +130,6 @@ struct AttentionKernel {
     int32_t num_batches;
     int32_t num_heads;
 
-    CUTLASS_HOST_DEVICE int32_t o_strideM() const {
-      return head_dim_value;
-    }
     // Moves pointers to what we should process
     // Returns "false" if there is no work to do
     CUTLASS_DEVICE bool advance_to_block() {
@@ -173,11 +171,11 @@ struct AttentionKernel {
       query_ptr += (q_start + query_start) * q_strideM + head_id * q_strideH;
       key_ptr += k_start * k_strideM + head_id * k_strideH;
       value_ptr += k_start * v_strideM + head_id * v_strideH;
-      output_ptr += int64_t(q_start + query_start) * o_strideM() +
+      output_ptr += int64_t(q_start + query_start) * o_strideM +
           head_id * o_strideH;
 
       if (output_accum_ptr != nullptr) {
-        output_accum_ptr += int64_t(q_start + query_start) * o_strideM() +
+        output_accum_ptr += int64_t(q_start + query_start) * o_strideM +
             head_id * o_strideH;
       } else {
         // Accumulate directly in the destination buffer (eg for f32)
@@ -463,7 +461,7 @@ struct AttentionKernel {
     auto createOutputIter = [&](int col) -> typename MM1::OutputTileIterator {
       using OutputTileIterator = typename MM1::OutputTileIterator;
       return OutputTileIterator(
-          typename OutputTileIterator::Params{(int32_t)p.o_strideM()},
+          typename OutputTileIterator::Params{(int32_t)p.o_strideM},
           p.output_ptr,
           typename OutputTileIterator::TensorCoord{
               p.num_queries, p.head_dim_value},
@@ -475,7 +473,7 @@ struct AttentionKernel {
         typename MM1::OutputTileIteratorAccum {
           using OutputTileIteratorAccum = typename MM1::OutputTileIteratorAccum;
           return OutputTileIteratorAccum(
-              typename OutputTileIteratorAccum::Params{(int32_t)p.o_strideM()},
+              typename OutputTileIteratorAccum::Params{(int32_t)p.o_strideM},
               p.output_accum_ptr,
               typename OutputTileIteratorAccum::TensorCoord{
                   p.num_queries, p.head_dim_value},

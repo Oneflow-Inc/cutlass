@@ -853,6 +853,7 @@ public:
       p.q_strideM = int32_t(ldq_host[0]);
       p.k_strideM = int32_t(ldk_host[0]);
       p.v_strideM = int32_t(ldv_host[0]);
+      p.o_strideM = p.head_dim_value;
       p.q_strideH = p.q_strideM * options.seq_length;
       p.k_strideH = p.k_strideM * options.seq_length_kv;
       p.v_strideH = p.v_strideM * options.seq_length_kv;
