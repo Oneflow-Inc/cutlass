@@ -209,7 +209,7 @@ protected:
     operator_args.ref_C = 
     {
       nullptr, 
-      configuration->stride_b.size() == 0 ?
+      configuration->stride_c.size() == 0 ?
       LayoutC::packed(implicit_gemm_tensor_c_extent(kConvolutionalOperator, configuration->problem_size))
       : LayoutC(make_Coord(configuration->stride_c.at(0), configuration->stride_c.at(1), configuration->stride_c.at(2)))
     };
@@ -477,7 +477,7 @@ protected:
     operator_args.ref_C = 
     {
       nullptr, 
-      configuration->stride_b.size() == 0 ?
+      configuration->stride_c.size() == 0 ?
       LayoutC::packed(implicit_gemm_tensor_c_extent(kConvolutionalOperator, configuration->problem_size))
       : LayoutC(make_Coord(configuration->stride_c.at(0), configuration->stride_c.at(1), configuration->stride_c.at(2)))
     };
