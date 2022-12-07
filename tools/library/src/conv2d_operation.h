@@ -181,22 +181,37 @@ protected:
 
     operator_args.problem_size = configuration->problem_size;
 
+    if (configuration->stride_a.size() != 0 && configuration->stride_a.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_A = 
     {
       nullptr, 
+      configuration->stride_a.size() == 0 ?
       LayoutA::packed(implicit_gemm_tensor_a_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutA(make_Coord(configuration->stride_a.at(0), configuration->stride_a.at(1), configuration->stride_a.at(2)))
     };
-    
+
+    if (configuration->stride_b.size() != 0 && configuration->stride_b.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_B = 
     {
       nullptr, 
+      configuration->stride_b.size() == 0 ?
       LayoutB::packed(implicit_gemm_tensor_b_extent(kConvolutionalOperator, configuration->problem_size))
-    };
-    
+      : LayoutB(make_Coord(configuration->stride_b.at(0), configuration->stride_b.at(1), configuration->stride_b.at(2)))
+    }; 
+
+    if (configuration->stride_c.size() != 0 && configuration->stride_c.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_C = 
     {
       nullptr, 
+      configuration->stride_b.size() == 0 ?
       LayoutC::packed(implicit_gemm_tensor_c_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutC(make_Coord(configuration->stride_c.at(0), configuration->stride_c.at(1), configuration->stride_c.at(2)))
     };
     
     operator_args.ref_D = 
@@ -426,28 +441,45 @@ protected:
 
     operator_args.problem_size = configuration->problem_size;
 
+    if (configuration->stride_a.size() != 0 && configuration->stride_a.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_A = 
     {
       nullptr, 
+      configuration->stride_a.size() == 0 ?
       LayoutA::packed(implicit_gemm_tensor_a_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutA(make_Coord(configuration->stride_a.at(0), configuration->stride_a.at(1), configuration->stride_a.at(2)))
     };
-    
+
+    if (configuration->stride_b.size() != 0 && configuration->stride_b.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_B = 
     {
       nullptr, 
+      configuration->stride_b.size() == 0 ?
       LayoutB::packed(implicit_gemm_tensor_b_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutB(make_Coord(configuration->stride_b.at(0), configuration->stride_b.at(1), configuration->stride_b.at(2)))
     };
     
     operator_args.ref_reordered_B = 
     {
       nullptr, 
+      configuration->stride_b.size() == 0 ?
       LayoutB::packed(implicit_gemm_tensor_b_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutB(make_Coord(configuration->stride_b.at(0), configuration->stride_b.at(1), configuration->stride_b.at(2)))
     };
-    
+
+    if (configuration->stride_c.size() != 0 && configuration->stride_c.size() != 3) {
+      return Status::kInvalid;
+    }
     operator_args.ref_C = 
     {
       nullptr, 
+      configuration->stride_b.size() == 0 ?
       LayoutC::packed(implicit_gemm_tensor_c_extent(kConvolutionalOperator, configuration->problem_size))
+      : LayoutC(make_Coord(configuration->stride_c.at(0), configuration->stride_c.at(1), configuration->stride_c.at(2)))
     };
     
     operator_args.ref_D = 
