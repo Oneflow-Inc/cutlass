@@ -1,1 +1,1 @@
-Copy from https://github.com/facebookresearch/xformers/tree/1637b24603b1107b89a720a0d50fe9719e522b4d/xformers/csrc/attention/cuda/fmha .
+Copy from https://github.com/facebookresearch/xformers/tree/4cd835c7f743ffaf2e427f1649c93a010ab46d15/xformers/csrc/attention/cuda/fmha .
