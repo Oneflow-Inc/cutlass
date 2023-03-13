@@ -8,7 +8,6 @@
 #include <ATen/cuda/CUDAGeneratorImpl.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/library.h>
-#include "ATen/ops/empty_like.h"
 
 #include "autogen/cutlassB.h"
 #include "gemm_kernel_utils.h"
@@ -23,12 +22,22 @@ mem_efficient_attention_backward_cutlass(
     const at::Tensor& key,
     const at::Tensor& value,
     const c10::optional<at::Tensor>& bias, // additive attention bias
+    // (Mode 1MHK only) [b+1]: cu_seqlens_q[b] contains the
+    // position of the first query token for batch $b
+    const c10::optional<at::Tensor>& cu_seqlens_q,
+    // (Mode 1MHK only) [b+1]: cu_seqlens_k[b] contains the
+    // position of the first key token for batch $b
+    const c10::optional<at::Tensor>& cu_seqlens_k,
+    // (Mode 1MHK only) Maximum sequence length across batches
+    int64_t max_seqlen_q,
+    // (Mode 1MHK only) Maximum sequence length across batches
+    int64_t max_seqlen_k,
     const at::Tensor& logsumexp,
     const at::Tensor& out,
     double dropout_p, // dropout probability
     int64_t rng_seed, // seed using for generating random numbers for dropout
     int64_t rng_offset, // offset into random number sequence
-    bool causal,
+    int64_t custom_mask_type,
     const c10::optional<double> scale) {
 #ifdef XFORMERS_MEM_EFF_ATTENTION_DISABLE_BACKWARD
   TORCH_CHECK(
@@ -70,28 +79,43 @@ mem_efficient_attention_backward_cutlass(
   CHECK_NOSPARSE_LASTCONTIGUOUS_CUDA(key);
   CHECK_NOSPARSE_LASTCONTIGUOUS_CUDA(value);
 
+  TORCH_CHECK(cu_seqlens_q.has_value() == cu_seqlens_k.has_value());
+  TORCH_CHECK(
+      !(cu_seqlens_q.has_value() && bias.has_value()),
+      "cu seqlen + bias not supported");
+  if (cu_seqlens_q.has_value()) {
+    TORCH_CHECK(cu_seqlens_q->scalar_type() == at::ScalarType::Int);
+    TORCH_CHECK(cu_seqlens_k->scalar_type() == at::ScalarType::Int);
+    TORCH_CHECK(cu_seqlens_q->dim() == 1 && cu_seqlens_k->dim() == 1);
+    CHECK_NOSPARSE_CONTIGUOUS_CUDA((*cu_seqlens_q));
+    CHECK_NOSPARSE_CONTIGUOUS_CUDA((*cu_seqlens_k));
+    TORCH_CHECK(cu_seqlens_q->size(0) == cu_seqlens_k->size(0));
+    TORCH_CHECK(query.size(0) == 1, "cu_seqlen only supports batch_size=1");
+    TORCH_CHECK(max_seqlen_q > 0, "max_seqlen_q required with `cu_seqlens_q`");
+    TORCH_CHECK(max_seqlen_k > 0, "max_seqlen_q required with `cu_seqlens_q`");
+    TORCH_CHECK(
+        max_seqlen_k <= key.size(1), "Invalid max_seqlen_k:", max_seqlen_k);
+    TORCH_CHECK(
+        max_seqlen_q <= query.size(1), "Invalid max_seqlen_q:", max_seqlen_q);
+  } else {
+    max_seqlen_q = query.size(1);
+    max_seqlen_k = key.size(1);
+  }
+
   at::cuda::CUDAGuard device_guard(query.device());
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   int64_t B = query.size(0);
   int64_t M = query.size(1);
-  int64_t Mkv = key.size(1);
   int64_t N = key.size(1);
   int64_t nH = query.size(2);
   int64_t K = query.size(3);
   int64_t Kv = value.size(3);
 
-  // It does not make sense to use that in practice,
-  // but let's still make sure we are correct
-  // As we iterate through keys first, we skip
-  // keys with no query associated, so they are not
-  // initialized
-  bool grad_kv_needs_init = causal && N > M;
   const bool bias_requires_grad = bias.has_value() && bias->requires_grad();
 
   at::Tensor grad_q, grad_k, grad_v, grad_bias;
-  if (!grad_kv_needs_init && query.size(1) == key.size(1) &&
-      query.size(3) == value.size(3) &&
+  if (query.size(1) == key.size(1) && query.size(3) == value.size(3) &&
       query.storage().is_alias_of(key.storage()) &&
       query.storage().is_alias_of(value.storage())) {
     // Create one big contiguous chunk
@@ -105,13 +129,17 @@ mem_efficient_attention_backward_cutlass(
     grad_v = chunk.select(2, 2);
   } else {
     grad_q = at::empty(query.sizes(), query.options());
-    grad_k = grad_kv_needs_init ? at::zeros(key.sizes(), key.options())
-                                : at::empty(key.sizes(), key.options());
-    grad_v = grad_kv_needs_init ? at::zeros(value.sizes(), value.options())
-                                : at::empty(value.sizes(), value.options());
+    grad_k = at::empty(key.sizes(), key.options());
+    grad_v = at::empty(value.sizes(), value.options());
   }
   if (bias_requires_grad) {
-    grad_bias = at::empty(bias->sizes(), bias->options());
+    // force alignment for the last dim
+    std::vector<int64_t> sz = bias->sizes().vec();
+    int64_t lastDim = sz[sz.size() - 1];
+    int64_t alignTo = 16;
+    sz[sz.size() - 1] = alignTo * ((lastDim + alignTo - 1) / alignTo);
+    grad_bias = at::empty(sz, bias->options())
+                    .slice(/*dim=*/-1, /*start=*/0, /*end=*/lastDim);
   }
   at::Tensor workspace;
 
@@ -123,8 +151,7 @@ mem_efficient_attention_backward_cutlass(
 
   bool kernel_launched = false;
   const auto maxK = std::max(query.size(3), value.size(3));
-  const auto maxShmem =
-      getMaximumSharedMemoryPerBlockKb(computeCapability) * 1024;
+  const auto maxShmem = p->sharedMemPerBlockOptin;
 
   auto launchKernel = [&](auto _k, auto kernel_fn) {
     using Kernel = decltype(_k);
@@ -181,18 +208,23 @@ mem_efficient_attention_backward_cutlass(
     p.delta_ptr = (float*)delta.data_ptr();
     p.head_dim = query.size(3);
     p.head_dim_value = value.size(3);
-    p.num_queries = query.size(1);
-    p.num_keys = key.size(1);
-    p.num_batches = B;
+    p.num_queries = max_seqlen_q;
+    p.num_keys = max_seqlen_k;
+    p.num_batches = cu_seqlens_q.has_value() ? cu_seqlens_q->size(0) - 1 : B;
     p.num_heads = nH;
-    p.causal = causal;
+    p.custom_mask_type = custom_mask_type;
     if (scale.has_value()) {
       p.scale = float(*scale);
     } else {
       p.scale = float(1.0 / std::sqrt(float(p.head_dim)));
     }
+    if (cu_seqlens_q.has_value()) {
+      p.cu_seqlens_q_ptr = (int32_t*)cu_seqlens_q->data_ptr();
+      p.cu_seqlens_k_ptr = (int32_t*)cu_seqlens_k->data_ptr();
+    }
 
-    ASSIGN_CHECK_OVERFLOW(p.lse_strideM, logsumexp.stride(1));
+    ASSIGN_CHECK_OVERFLOW(p.lse_strideB, logsumexp.stride(0));
+    ASSIGN_CHECK_OVERFLOW(p.lse_strideH, logsumexp.stride(1));
     ASSIGN_CHECK_OVERFLOW(p.gO_strideB, grad_out.stride(0));
     ASSIGN_CHECK_OVERFLOW(p.gO_strideM, grad_out.stride(1));
     ASSIGN_CHECK_OVERFLOW(p.gO_strideH, grad_out.stride(2));
@@ -220,9 +252,14 @@ mem_efficient_attention_backward_cutlass(
     ASSIGN_CHECK_OVERFLOW(p.q_strideH, query.stride(2));
     ASSIGN_CHECK_OVERFLOW(p.k_strideH, key.stride(2));
     ASSIGN_CHECK_OVERFLOW(p.v_strideH, value.stride(2));
+    ASSIGN_CHECK_OVERFLOW(p.delta_strideB, delta.stride(0));
+    ASSIGN_CHECK_OVERFLOW(p.delta_strideH, delta.stride(1));
 
     if (bias.has_value()) {
       CHECK_NOSPARSE_LASTCONTIGUOUS_CUDA((*bias));
+      TORCH_CHECK(
+          bias->scalar_type() == CutlassToAtenDtype<scalar_t>::atScalarType(),
+          "invalid dtype for bias - should match query's dtype");
 
       p.bias_ptr = (scalar_t*)bias->data_ptr();
 

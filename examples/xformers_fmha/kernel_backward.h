@@ -144,7 +144,7 @@ struct GmemTile {
 
 template <typename scalar_t, typename Arch>
 constexpr int getWarpsPerSm() {
-  bool is_half = !std::is_same<scalar_t, float>::value;
+  bool is_half = !cutlass::platform::is_same<scalar_t, float>::value;
   if (Arch::kMinComputeCapability >= 80) {
     return is_half ? 12 : 8;
   }
@@ -167,8 +167,14 @@ template <
     int kBlockSizeI_,
     int kBlockSizeJ_,
     // upperbound on `max(value.shape[-1], query.shape[-1])`
-    int kMaxK_ = std::numeric_limits<int>::max()>
+    int kMaxK_ = (int)cutlass::platform::numeric_limits<uint32_t>::max()>
 struct AttentionBackwardKernel {
+  enum CustomMaskType {
+    NoCustomMask = 0,
+    CausalFromTopLeft = 1,
+    CausalFromBottomRight = 2,
+    NumCustomMaskTypes,
+  };
   using scalar_t = scalar_t_;
   using output_t = scalar_t;
   using output_accum_t = float;
@@ -191,7 +197,9 @@ struct AttentionBackwardKernel {
     lse_scalar_t* logsumexp_ptr; // [nH, Mq]
     scalar_t* output_ptr; // [Mq, nH, Kv]
     scalar_t* grad_output_ptr; // [Mq, nH, Kv]
-    accum_t* delta_ptr; // [Mq, nH]
+    accum_t* delta_ptr; // [nH, Mq]
+    int32_t* cu_seqlens_q_ptr = nullptr;
+    int32_t* cu_seqlens_k_ptr = nullptr;
 
     // Output tensors
     output_t* grad_query_ptr; //  [Mq, nH, K]
@@ -204,19 +212,19 @@ struct AttentionBackwardKernel {
       output_accum_t* workspace = nullptr; // [Mq, Kq] + [Mkv, Kq] + [Mkv, Kv]
       output_accum_t* workspace_gk;
     };
-    output_accum_t* workspace_gv;
-    output_accum_t* workspace_gq;
+    output_accum_t* workspace_gv; // (will be calculated by the kernel)
+    output_accum_t* workspace_gq; // (will be calculated by the kernel)
 
     // Scale
     accum_t scale;
 
     // Dimensions/strides
-    int32_t head_dim;
-    int32_t head_dim_value;
-    int32_t num_queries;
-    int32_t num_keys;
-    int32_t num_heads;
-    bool causal;
+    int32_t head_dim = -1;
+    int32_t head_dim_value = -1;
+    int32_t num_queries = -1;
+    int32_t num_keys = -1;
+    int32_t num_heads = -1;
+    uint8_t custom_mask_type = NoCustomMask;
 
     int32_t q_strideM;
     int32_t k_strideM;
@@ -224,7 +232,7 @@ struct AttentionBackwardKernel {
     int32_t bias_strideM = 0;
     int32_t gO_strideM;
     int32_t gB_strideM;
-    int8_t gQKV_strideM_multiplier; // 3 for packed, 1 otherwise
+    int8_t gQKV_strideM_multiplier = 1; // 3 for packed, 1 otherwise
 
 #ifdef HAS_PYTORCH
     // dropout
@@ -232,7 +240,7 @@ struct AttentionBackwardKernel {
 #endif
     // RNG sequence offset based on batch_id and head_id
     unsigned long long dropout_batch_head_rng_offset;
-    float dropout_prob;
+    float dropout_prob = 0.0f;
 
     CUTLASS_HOST_DEVICE int32_t o_strideM() const {
       return head_dim_value * num_heads;
@@ -259,34 +267,85 @@ struct AttentionBackwardKernel {
     int64_t k_strideB;
     int64_t v_strideB;
     int64_t bias_strideB = 0;
-    int64_t lse_strideM;
+    int64_t lse_strideB;
+    int64_t lse_strideH;
+    int64_t delta_strideB;
+    int64_t delta_strideH;
     int32_t num_batches;
 
-    int64_t gO_strideB;
-    int64_t gQ_strideB;
-    int64_t gK_strideB;
-    int64_t gV_strideB;
-    int64_t gB_strideB;
-    int64_t gO_strideH;
-    int64_t gQ_strideH;
-    int64_t gK_strideH;
-    int64_t gV_strideH;
-    int64_t gB_strideH;
+    int64_t gO_strideB = 0;
+    int64_t gQ_strideB = 0;
+    int64_t gK_strideB = 0;
+    int64_t gV_strideB = 0;
+    int64_t gB_strideB = 0;
+    int64_t gO_strideH = 0;
+    int64_t gQ_strideH = 0;
+    int64_t gK_strideH = 0;
+    int64_t gV_strideH = 0;
+    int64_t gB_strideH = 0;
 
     CUTLASS_DEVICE bool advance_to_block() {
       int64_t batch_id = blockIdx.z;
       int32_t head_id = blockIdx.y;
 
+      if (kNeedsAccumGradQ || kNeedsAccumGradK || kNeedsAccumGradV) {
+        assert(workspace_size() == 0 || workspace != nullptr);
+
+        workspace += (batch_id * num_heads + head_id) * workspace_strideBH();
+        workspace = warp_uniform(workspace);
+        workspace_gv = workspace + workspace_elements_gk();
+        workspace_gq = workspace_gv + workspace_elements_gv();
+      } else {
+        workspace = nullptr;
+      }
+
+      // Advance pointers that depend on the total concatenated
+      // number of queries, as `num_queries` is modified in the block
+      // below
+      dropout_batch_head_rng_offset =
+          batch_id * (num_heads * num_queries * num_keys) +
+          head_id * (num_queries * num_keys);
+      logsumexp_ptr += batch_id * lse_strideB + head_id * lse_strideH;
+
+      if (cu_seqlens_q_ptr != nullptr) {
+        assert(cu_seqlens_k_ptr != nullptr);
+        cu_seqlens_q_ptr += batch_id;
+        cu_seqlens_k_ptr += batch_id;
+        int32_t q_start = cu_seqlens_q_ptr[0];
+        int32_t k_start = cu_seqlens_k_ptr[0];
+        int64_t q_next_start = cu_seqlens_q_ptr[1];
+        int64_t k_next_start = cu_seqlens_k_ptr[1];
+        assert(q_next_start - q_start <= num_queries);
+        assert(k_next_start - k_start <= num_keys);
+        num_queries = q_next_start - q_start;
+        num_keys = k_next_start - k_start;
+
+        // Jump manually
+        batch_id = 0;
+
+        query_ptr += q_start * q_strideM;
+        key_ptr += k_start * k_strideM;
+        value_ptr += k_start * v_strideM;
+        assert(bias_ptr == nullptr);
+        assert(grad_bias_ptr == nullptr);
+        output_ptr += q_start * o_strideM();
+        grad_output_ptr += q_start * gO_strideM;
+        delta_ptr += q_start;
+
+        grad_query_ptr += q_start * gQ_strideM();
+        grad_key_ptr += k_start * gK_strideM();
+        grad_value_ptr += k_start * gV_strideM();
+      }
+
       query_ptr += batch_id * q_strideB + head_id * q_strideH;
       key_ptr += batch_id * k_strideB + head_id * k_strideH;
       value_ptr += batch_id * v_strideB + head_id * v_strideH;
-      logsumexp_ptr += (batch_id * num_heads + head_id) * lse_strideM;
       if (bias_ptr != nullptr) {
         bias_ptr += batch_id * bias_strideB + head_id * bias_strideH;
       }
       output_ptr += batch_id * o_strideB + head_id * o_strideH;
       grad_output_ptr += batch_id * gO_strideB + head_id * gO_strideH;
-      delta_ptr += (batch_id * num_heads + head_id) * num_queries;
+      delta_ptr += batch_id * delta_strideB + head_id * delta_strideH;
 
       grad_query_ptr += batch_id * gQ_strideB + head_id * gQ_strideH;
       grad_key_ptr += batch_id * gK_strideB + head_id * gK_strideH;
@@ -294,10 +353,6 @@ struct AttentionBackwardKernel {
       if (grad_bias_ptr != nullptr) {
         grad_bias_ptr += batch_id * gB_strideB + head_id * gB_strideH;
       }
-
-      dropout_batch_head_rng_offset =
-          batch_id * (num_heads * num_queries * num_keys) +
-          head_id * (num_queries * num_keys);
 
       head_dim = warp_uniform(head_dim);
       head_dim_value = warp_uniform(head_dim_value);
@@ -324,18 +379,16 @@ struct AttentionBackwardKernel {
       grad_key_ptr = warp_uniform(grad_key_ptr);
       grad_value_ptr = warp_uniform(grad_value_ptr);
       grad_bias_ptr = warp_uniform(grad_bias_ptr);
+      custom_mask_type = warp_uniform(custom_mask_type);
 
-      if (kNeedsAccumGradQ || kNeedsAccumGradK || kNeedsAccumGradV) {
-        assert(workspace_size() == 0 || workspace != nullptr);
-
-        workspace += (batch_id * num_heads + head_id) * workspace_strideBH();
-        workspace = warp_uniform(workspace);
-        workspace_gv = workspace + workspace_elements_gk();
-        workspace_gq = workspace_gv + workspace_elements_gv();
-      } else {
-        workspace = nullptr;
-      }
-
+#if 0
+      PRINT_T0("[b:%d h:%d] dp[0]:%f Q:%f K:%f V:%f LSE:%f",
+        int(blockIdx.z), int(blockIdx.y),
+        float(delta_ptr[0]),
+        float(query_ptr[0]), float(key_ptr[0]), float(value_ptr[0]),
+        float(logsumexp_ptr[0])
+      )
+#endif
       return true;
     }
 
@@ -412,11 +465,11 @@ struct AttentionBackwardKernel {
       kIsHalf && (kOutputInRF || ArchTag::kMinComputeCapability != 70);
 
   static constexpr bool kNeedsAccumGradQ =
-      !std::is_same<output_accum_t, output_t>::value;
-  static constexpr bool kNeedsAccumGradK =
-      !kOutputInRF && !std::is_same<output_accum_t, output_t>::value;
-  static constexpr bool kNeedsAccumGradV =
-      !kOutputInRF && !std::is_same<output_accum_t, output_t>::value;
+      !cutlass::platform::is_same<output_accum_t, output_t>::value;
+  static constexpr bool kNeedsAccumGradK = !kOutputInRF &&
+      !cutlass::platform::is_same<output_accum_t, output_t>::value;
+  static constexpr bool kNeedsAccumGradV = !kOutputInRF &&
+      !cutlass::platform::is_same<output_accum_t, output_t>::value;
 
   // Launch bounds
   static constexpr int64_t kNumThreads = kWarpSize * kNumWarpsPerBlock;
@@ -433,8 +486,9 @@ struct AttentionBackwardKernel {
           scalar_t, // ElementC
           accum_t // ElementAccumulator
           >;
-  static constexpr auto kOptimalAlignement =
-      std::max(DefaultConfig::kAlignmentA, DefaultConfig::kAlignmentB);
+  static constexpr auto kOptimalAlignement = cutlass::platform::max(
+      DefaultConfig::kAlignmentA,
+      DefaultConfig::kAlignmentB);
   static constexpr auto kMinimumAlignment = GemmType::kMinimumAlignment;
 
   struct MatmulQK {
@@ -557,7 +611,7 @@ struct AttentionBackwardKernel {
     using OutputTileIterator =
         typename cutlass::epilogue::threadblock::MakePrefetchableIterator<
             typename DefaultEpilogue::OutputTileIterator>::Iterator;
-    using AccumTileGmem = GmemTile<typename Mma::FragmentC, kNumThreads>;
+    using AccumTileGmem = GmemTile<typename Mma::FragmentC, (int)kNumThreads>;
   };
 
   struct MatmulDOIVJ {
@@ -667,7 +721,7 @@ struct AttentionBackwardKernel {
     using OutputTileIterator =
         typename cutlass::epilogue::threadblock::MakePrefetchableIterator<
             typename DefaultEpilogue::OutputTileIterator>::Iterator;
-    using AccumTileGmem = GmemTile<typename Mma::FragmentC, kNumThreads>;
+    using AccumTileGmem = GmemTile<typename Mma::FragmentC, (int)kNumThreads>;
   };
   struct MatmulGradK {
     // grad_k <- tmp.transpose(-2, -1) @ q_i
@@ -722,7 +776,7 @@ struct AttentionBackwardKernel {
     using OutputTileIterator =
         typename cutlass::epilogue::threadblock::MakePrefetchableIterator<
             typename DefaultEpilogue::OutputTileIterator>::Iterator;
-    using AccumTileGmem = GmemTile<typename Mma::FragmentC, kNumThreads>;
+    using AccumTileGmem = GmemTile<typename Mma::FragmentC, (int)kNumThreads>;
   };
 
   // shared storage for keeping Zij matrix. not needed if we aren't using
@@ -745,8 +799,6 @@ struct AttentionBackwardKernel {
           typename MatmulQK::AccumulatorSharedStorage::Layout,
           typename cutlass::MatrixShape<0, 0>>>::type;
 
-  // See https://fburl.com/gsheet/l5bltspl
-  // for an illustration of how smem is used
   struct SharedStoragePrologue {
     struct {
       cutlass::Array<accum_t, kBlockSizeI> di; // (do_i * o_i).sum(-1)
@@ -1005,7 +1057,7 @@ struct AttentionBackwardKernel {
     FIELD(p6, gradV_epilogue_final)
   };
 
-  using SharedStorage = typename std::conditional<
+  using SharedStorage = typename cutlass::platform::conditional<
       kPreloadMmas,
       SharedStoragePrologue,
       SharedStorageNoPrologue>::type;
@@ -1027,22 +1079,78 @@ struct AttentionBackwardKernel {
     CHECK_ALIGNED_PTR(p.output_ptr, kMinimumAlignment);
     CHECK_ALIGNED_PTR(p.grad_output_ptr, kMinimumAlignment);
     CHECK_ALIGNED_PTR(p.bias_ptr, kMinimumAlignment);
-    XFORMERS_CHECK(p.lse_strideM % 8 == 0, "LSE is not correctly aligned");
+    XFORMERS_CHECK(p.lse_strideH % 8 == 0, "LSE is not correctly aligned");
+    XFORMERS_CHECK(p.lse_strideB % 8 == 0, "LSE is not correctly aligned");
     XFORMERS_CHECK(
-        p.q_strideH % kMinimumAlignment == 0, "query is not correctly aligned");
+        p.num_heads <= 1 || p.q_strideH % kMinimumAlignment == 0,
+        "query is not correctly aligned (strideH)");
     XFORMERS_CHECK(
-        p.k_strideH % kMinimumAlignment == 0, "key is not correctly aligned");
+        p.num_heads <= 1 || p.k_strideH % kMinimumAlignment == 0,
+        "key is not correctly aligned (strideH)");
     XFORMERS_CHECK(
-        p.v_strideH % kMinimumAlignment == 0, "value is not correctly aligned");
+        p.num_heads <= 1 || p.v_strideH % kMinimumAlignment == 0,
+        "value is not correctly aligned (strideH)");
     XFORMERS_CHECK(
-        p.bias_strideB % kMinimumAlignment == 0,
-        "attn_bias is not correctly aligned");
+        p.num_batches <= 1 || p.q_strideB % kMinimumAlignment == 0,
+        "query is not correctly aligned (strideB)");
     XFORMERS_CHECK(
-        p.bias_strideH % kMinimumAlignment == 0,
-        "attn_bias is not correctly aligned");
+        p.num_batches <= 1 || p.k_strideB % kMinimumAlignment == 0,
+        "key is not correctly aligned (strideB)");
     XFORMERS_CHECK(
-        p.bias_strideM % kMinimumAlignment == 0,
-        "attn_bias is not correctly aligned");
+        p.num_batches <= 1 || p.v_strideB % kMinimumAlignment == 0,
+        "value is not correctly aligned (strideB)");
+    XFORMERS_CHECK(
+        p.q_strideM % kMinimumAlignment == 0,
+        "query is not correctly aligned (strideM)");
+    XFORMERS_CHECK(
+        p.k_strideM % kMinimumAlignment == 0,
+        "key is not correctly aligned (strideM)");
+    XFORMERS_CHECK(
+        p.v_strideM % kMinimumAlignment == 0,
+        "value is not correctly aligned (strideM)");
+    if (p.bias_ptr) {
+      XFORMERS_CHECK(
+          p.num_batches <= 1 || p.bias_strideB % kMinimumAlignment == 0,
+          "attn_bias is not correctly aligned (strideB)");
+      XFORMERS_CHECK(
+          p.num_heads <= 1 || p.bias_strideH % kMinimumAlignment == 0,
+          "attn_bias is not correctly aligned (strideH)");
+      XFORMERS_CHECK(
+          p.bias_strideM % kMinimumAlignment == 0,
+          "attn_bias is not correctly aligned (strideM)");
+    }
+    if (p.grad_bias_ptr) {
+      XFORMERS_CHECK(
+          p.num_batches <= 1 || p.gB_strideB % kMinimumAlignment == 0,
+          "attn_bias.grad is not correctly aligned (strideB)");
+      XFORMERS_CHECK(
+          p.num_heads <= 1 || p.gB_strideH % kMinimumAlignment == 0,
+          "attn_bias.grad is not correctly aligned (strideH)");
+      XFORMERS_CHECK(
+          p.gB_strideM % kMinimumAlignment == 0,
+          "attn_bias.grad is not correctly aligned (strideM)");
+    }
+    XFORMERS_CHECK(
+        !(p.cu_seqlens_q_ptr && p.bias_ptr),
+        "CuSeqlen + bias not implemented yet");
+    XFORMERS_CHECK(
+        p.custom_mask_type < NumCustomMaskTypes,
+        "Invalid value for `custom_mask_type`");
+    XFORMERS_CHECK(
+        p.dropout_prob <= 1.0f && p.dropout_prob >= 0.0f,
+        "Invalid value for `dropout_prob`");
+    XFORMERS_CHECK(
+        kApplyDropout || p.dropout_prob == 0.0f,
+        "Set `kApplyDropout`=True to support `dropout_prob > 0`");
+    XFORMERS_CHECK(p.head_dim > 0, "Invalid value for `head_dim`");
+    XFORMERS_CHECK(p.head_dim_value > 0, "Invalid value for `head_dim_value`");
+    XFORMERS_CHECK(p.num_queries > 0, "Invalid value for `num_queries`");
+    XFORMERS_CHECK(p.num_keys > 0, "Invalid value for `num_keys`");
+    XFORMERS_CHECK(p.num_heads > 0, "Invalid value for `num_heads`");
+    XFORMERS_CHECK(p.num_batches > 0, "Invalid value for `num_batches`");
+    XFORMERS_CHECK(p.head_dim <= kMaxK, "kMaxK: Expected `head_dim < kMaxK`");
+    XFORMERS_CHECK(
+        p.head_dim_value <= kMaxK, "kMaxK: Expected `head_dim_value < kMaxK`");
     return true;
   }
 
@@ -1122,15 +1230,16 @@ struct AttentionBackwardKernel {
       }
       if (kOutputInRF) {
         writeFragsToGmem<true>(shared_storage, output_frags, p, key_start);
+      } else if (getQueryStart(p, key_start) >= p.num_queries) {
+        zfillGradKV<true>(p, key_start);
       }
       __syncthreads();
     }
     // Last (partial) key
     if (key_start != p.num_keys) {
       output_frags.clear();
-      for (int32_t query_start = getQueryStart(p, key_start);
-           query_start < p.num_queries;
-           query_start += kBlockSizeI) {
+      int32_t query_start = getQueryStart(p, key_start);
+      for (; query_start < p.num_queries; query_start += kBlockSizeI) {
         processBlockIJ<false>(
             shared_storage,
             output_frags,
@@ -1141,6 +1250,8 @@ struct AttentionBackwardKernel {
       }
       if (kOutputInRF) {
         writeFragsToGmem<false>(shared_storage, output_frags, p, key_start);
+      } else if (getQueryStart(p, key_start) >= p.num_queries) {
+        zfillGradKV<false>(p, key_start);
       }
     }
   }
@@ -1160,6 +1271,37 @@ struct AttentionBackwardKernel {
   }
 
   template <bool skipBoundsChecks>
+  static CUTLASS_DEVICE void zfillGradKV(Params const& p, int32_t key_start) {
+    constexpr int kThreadsPerKey = 8;
+    constexpr int kParallelKeys = kNumThreads / kThreadsPerKey;
+    static_assert(kBlockSizeJ % kParallelKeys == 0, "");
+    // This function is not really optimized, but should rarely be used
+    // It's only used when some keys are "useless" and don't attend to
+    // any query, due to causal masking
+
+    int lane_id = get_lane_id();
+    int thread_id = get_thread_id();
+    int k_shift = lane_id % kThreadsPerKey;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int j = 0; j < kBlockSizeJ; j += kParallelKeys) {
+      int key = key_start + j + (thread_id / kThreadsPerKey);
+      if (!skipBoundsChecks && key >= p.num_keys) {
+        continue;
+      }
+      auto gv_ptr = p.grad_value_ptr + key * p.gV_strideM();
+      auto gk_ptr = p.grad_key_ptr + key * p.gK_strideM();
+
+      for (int k = k_shift; k < p.head_dim_value; k += kThreadsPerKey) {
+        gv_ptr[k] = scalar_t(0);
+      }
+      for (int k = k_shift; k < p.head_dim; k += kThreadsPerKey) {
+        gk_ptr[k] = scalar_t(0);
+      }
+    }
+  }
+
+  template <bool skipBoundsChecks>
   static CUTLASS_DEVICE void processBlockIJ(
       SharedStorage& shared_storage,
       OutputFragments& output_frags,
@@ -1173,8 +1315,7 @@ struct AttentionBackwardKernel {
     int8_t warp_id = warp_uniform(threadIdx.y);
     int8_t lane_id = threadIdx.x;
 
-    bool isFirstQuery =
-        query_start == 0 || (p.causal && query_start <= key_start);
+    bool isFirstQuery = (query_start == getQueryStart(p, key_start));
     int32_t next_query, next_key;
     incrIteration(p, query_start, key_start, next_query, next_key);
     bool isLastQuery = next_key != key_start;
@@ -1183,11 +1324,12 @@ struct AttentionBackwardKernel {
 
     int32_t num_queries_in_block = skipBoundsChecks
         ? MatmulQK::Mma::Shape::kN
-        : std::min(
+        : cutlass::fast_min(
               (int32_t)MatmulQK::Mma::Shape::kN, p.num_queries - query_start);
     int32_t num_keys_in_block = skipBoundsChecks
         ? MatmulQK::Mma::Shape::kM
-        : std::min((int32_t)MatmulQK::Mma::Shape::kM, p.num_keys - key_start);
+        : cutlass::fast_min(
+              (int32_t)MatmulQK::Mma::Shape::kM, p.num_keys - key_start);
 
     auto prologueGradV = [&](int col) {
       typename MatmulGradV::Mma::IteratorB iterator_dO(
@@ -1336,16 +1478,24 @@ struct AttentionBackwardKernel {
       }
 
       // Apply mask
-      if (p.causal) {
+      if (p.custom_mask_type == CausalFromTopLeft ||
+          p.custom_mask_type == CausalFromBottomRight) {
         auto lane_offset = MatmulQK::AccumLambdaIterator::get_lane_offset(
             lane_id, warp_id, output_tile_coords);
+        int shift = query_start - key_start;
+        if (p.custom_mask_type == CausalFromBottomRight) {
+          shift += p.num_keys - p.num_queries;
+        }
+        // current_key = key_start + accum_m
+        // current_query = query_start + accum_n
+        // mask if: `current_key > current_query`
         MatmulQK::AccumLambdaIterator::iterateRows(
             lane_offset,
             [&](int accum_m) {},
             [&](int accum_m, int accum_n, int idx) {
-              // (don't forget we are transposed!)
-              if (accum_m > accum_n + query_start - key_start) {
-                accum[idx] = -std::numeric_limits<accum_t>::infinity();
+              if (accum_m > accum_n + shift) {
+                accum[idx] =
+                    -cutlass::platform::numeric_limits<accum_t>::infinity();
               }
             },
             [&](int accum_m) {});
@@ -1358,6 +1508,7 @@ struct AttentionBackwardKernel {
       if (kPrologueDOV) {
         prologueDOV();
       }
+
       MatmulQK::B2bGemm::accumApplyLSEToSmem(
           shared_storage.attn_shared_storage(),
           accum,
@@ -1721,8 +1872,7 @@ struct AttentionBackwardKernel {
       // Output results
       int32_t next_query, next_key;
       incrIteration(p, p.num_queries, key_start, next_query, next_key);
-      bool isLast =
-          (p.causal && next_query > query_start) || next_key >= p.num_keys;
+      bool isLast = next_query > query_start || next_key >= p.num_keys;
       if (kNeedsAccumGradQ && !isLast) {
         gmem_tile.store(accum, thread_id);
       } else {
@@ -1843,8 +1993,12 @@ struct AttentionBackwardKernel {
 
   static CUTLASS_DEVICE int32_t
   getQueryStart(Params const& p, int32_t key_start) {
-    if (p.causal) {
+    if (p.custom_mask_type == CausalFromTopLeft) {
       return (key_start / kBlockSizeI) * kBlockSizeI;
+    } else if (p.custom_mask_type == CausalFromBottomRight) {
+      int first_query =
+          cutlass::fast_max(0, key_start - p.num_keys - p.num_queries);
+      return (first_query / kBlockSizeI) * kBlockSizeI;
     }
     return 0;
   };
@@ -1907,7 +2061,8 @@ struct AttentionBackwardKernel {
       int32_t key_start) {
     int32_t num_keys_in_block = skipBoundsChecks
         ? MatmulQK::Mma::Shape::kM
-        : std::min((int32_t)MatmulQK::Mma::Shape::kM, p.num_keys - key_start);
+        : cutlass::fast_min(
+              (int32_t)MatmulQK::Mma::Shape::kM, p.num_keys - key_start);
     typename MatmulGradV::OutputTileIterator outputV_it(
         typename MatmulGradV::OutputTileIterator::Params{p.gV_strideM()},
         p.grad_value_ptr + key_start * p.gV_strideM(),
