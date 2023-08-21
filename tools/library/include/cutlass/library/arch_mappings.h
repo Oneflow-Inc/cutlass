@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -100,6 +100,12 @@ template <typename OperatorClass> struct ArchMap<arch::Sm86, OperatorClass> {
 template <typename OperatorClass> struct ArchMap<arch::Sm90, OperatorClass> {
   static int const kMin = 90;
   static int const kMax = 1024;
+};
+
+// Arch conditional WGMMA
+template <> struct ArchMap<arch::Sm90, arch::OpClassTensorOp> {
+  static int const kMin = 90;
+  static int const kMax = 90;
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

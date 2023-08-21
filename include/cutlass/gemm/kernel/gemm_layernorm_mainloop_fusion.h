@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -304,14 +304,18 @@ public:
     ThreadblockShape,
     ElementA,
     ElementB,
-    ElementC>
+    ElementC,
+    LayoutA,
+    LayoutB>
   {
     using ParamsBase = UniversalParamsBase<
       ThreadblockSwizzle,
       ThreadblockShape,
       ElementA,
       ElementB,
-      ElementC>;
+      ElementC,
+      LayoutA,
+      LayoutB>;
 
     //
     // Data members
@@ -384,8 +388,7 @@ public:
       ptr_scatter_D_indices(const_cast<int *>(args.ptr_scatter_D_indices))
     {}
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     void update(Arguments const &args)
     {
       ptr_A = const_cast<void *>(args.ptr_A);
@@ -396,6 +399,15 @@ public:
       ptr_beta = const_cast<void *>(args.ptr_beta);
       ptr_C = const_cast<void *>(args.ptr_C);
       ptr_D = args.ptr_D;
+
+      batch_stride_A = args.batch_stride_A;
+      batch_stride_B = args.batch_stride_B;
+      batch_stride_C = args.batch_stride_C;
+      batch_stride_var = args.batch_stride_var;
+      batch_stride_mean = args.batch_stride_mean;
+      batch_stride_gamma = args.batch_stride_gamma;
+      batch_stride_beta = args.batch_stride_beta;
+      this->batch_stride_D = args.batch_stride_D;
 
       ptr_gather_A_indices = const_cast<int *>(args.ptr_gather_A_indices);
       ptr_gather_B_indices = const_cast<int *>(args.ptr_gather_B_indices);

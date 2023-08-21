@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -746,7 +746,6 @@ TEST(SM75_warp_gemm_tensor_op_interleaved_i4, 128x128x128_16x16x128_8x8x32) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
 TEST(SM75_warp_gemm_tensor_op_crosswise_b1, 128x128x512_64x64x512_8x8x128) {
   using Shape = cutlass::gemm::GemmShape<64, 64, 512>;
   using InstructionShape = cutlass::gemm::GemmShape<8, 8, 128>;
@@ -856,5 +855,4 @@ TEST(SM75_warp_gemm_tensor_op_crosswise_b1, 128x128x512_16x16x512_8x8x128) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
 #endif

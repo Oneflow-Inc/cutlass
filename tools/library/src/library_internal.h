@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,6 +64,10 @@ namespace library {
 
 template <typename T> struct NumericTypeMap;
 
+template <> struct NumericTypeMap<void> {
+  static NumericTypeID const kId = NumericTypeID::kVoid;
+};
+
 template <> struct NumericTypeMap<cutlass::uint1b_t> {
   static NumericTypeID const kId = NumericTypeID::kB1;
 };
@@ -94,6 +98,14 @@ template <> struct NumericTypeMap<cutlass::uint4b_t> {
 
 template <> struct NumericTypeMap<uint8_t> {
   static NumericTypeID const kId = NumericTypeID::kU8;
+};
+
+template <> struct NumericTypeMap<cutlass::float_e4m3_t> {
+  static NumericTypeID const kId = NumericTypeID::kFE4M3;
+};
+
+template <> struct NumericTypeMap<cutlass::float_e5m2_t> {
+  static NumericTypeID const kId = NumericTypeID::kFE5M2;
 };
 
 template <> struct NumericTypeMap<uint16_t> {

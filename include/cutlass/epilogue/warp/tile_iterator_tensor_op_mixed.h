@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,7 +64,8 @@ template <
   int ElementSizeBits,            ///< Size of accumulator element in bits
   int OutputSizeBits,             ///< Size of output element in bits
   int OutputElementCount,         ///< number of elements in output vector
-  int ContiguousLanes             ///< Number of consecutive lanes writing to contiguous memory
+  int ContiguousLanes,            ///< Number of consecutive lanes writing to contiguous memory
+  bool EightBitsOutputOrLess = (OutputSizeBits <= 8)
 >
 class TileIteratorTensorOpMixed {
 public:
@@ -319,7 +320,7 @@ template <
   typename OperatorShape_,        ///< matrix multiply operation shape (concept: gemm::GemmShape),
   int OutputSizeBits              ///< Size of output element in bits
 >
-class TileIteratorTensorOpMixed<WarpShape_, OperatorShape_, int32_t, 32, OutputSizeBits, 16, 8> {
+class TileIteratorTensorOpMixed<WarpShape_, OperatorShape_, int32_t, 32, OutputSizeBits, 16, 8, true> {
 public:
 
   using WarpShape = WarpShape_;
@@ -526,7 +527,7 @@ template <
   typename OperatorShape_,        ///< matrix multiply operation shape (concept: gemm::GemmShape)
   int OutputSizeBits              ///< Size of output element in bits
 >
-class TileIteratorTensorOpMixed<WarpShape_, OperatorShape_, int32_t, 32, OutputSizeBits, 8, 8> {
+class TileIteratorTensorOpMixed<WarpShape_, OperatorShape_, int32_t, 32, OutputSizeBits, 8, 8, true> {
 public:
 
   using WarpShape = WarpShape_;
@@ -715,7 +716,6 @@ public:
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-
 } // namespace warp
 } // namespace epilogue
 } // namespace cutlass

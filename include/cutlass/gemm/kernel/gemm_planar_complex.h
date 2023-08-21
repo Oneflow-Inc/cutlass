@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -243,14 +243,18 @@ public:
     ThreadblockShape,
     ElementA,
     ElementB,
-    ElementC>
+    ElementC,
+    LayoutA,
+    LayoutB>
   {
     using ParamsBase = UniversalParamsBase<
       ThreadblockSwizzle,
       ThreadblockShape,
       ElementA,
       ElementB,
-      ElementC>;
+      ElementC,
+      LayoutA,
+      LayoutB>;
 
     //
     // Data members
@@ -339,8 +343,7 @@ public:
       return workspace_bytes;
     }
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     void update(Arguments const &args)
     {
       ptr_A_real = const_cast<void *>(args.ptr_A_real);
@@ -354,6 +357,15 @@ public:
 
       ptr_D_real = const_cast<void *>(args.ptr_D_real);
       ptr_D_imag = const_cast<void *>(args.ptr_D_imag);
+
+      batch_stride_A = args.batch_stride_A;
+      batch_stride_B = args.batch_stride_B;
+      batch_stride_C = args.batch_stride_C;
+      this->batch_stride_D = args.batch_stride_D;
+      batch_stride_A_imag = args.batch_stride_A_imag;
+      batch_stride_B_imag = args.batch_stride_B_imag;
+      batch_stride_C_imag = args.batch_stride_C_imag;
+      batch_stride_D_imag = args.batch_stride_D_imag;
 
       output_op = args.epilogue;
     }
@@ -525,7 +537,7 @@ public:
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
-    int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+    int warp_idx = canonical_warp_idx_sync();
 
     int lane_idx = threadIdx.x % 32;
 

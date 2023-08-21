@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,6 +55,7 @@ enum class FloatRoundStyle {
   round_indeterminate,          ///< rounding mode unknown
   round_toward_zero,            ///< round toward zero
   round_to_nearest,             ///< round to nearest even
+  round_to_nearest_satfinite,   ///< round to nearest even, capping value to min and max of destination type 
   round_toward_infinity,        ///< round toward infinity
   round_toward_neg_infinity,    ///< round toward negative infinity
   round_half_ulp_truncate,      ///< add 0.5ulp to integer representation then round toward zero
@@ -75,13 +76,13 @@ struct NumericConverter {
   static FloatRoundStyle const round_style = Round;
 
   CUTLASS_HOST_DEVICE
-    static result_type convert(source_type const & s) {
+  static result_type convert(source_type const & s) {
 
     return static_cast<result_type>(s);
   }
 
   CUTLASS_HOST_DEVICE
-    result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -107,7 +108,7 @@ struct NumericConverter<int32_t, float, FloatRoundStyle::round_to_nearest> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -126,7 +127,7 @@ struct NumericConverter<int32_t, float, FloatRoundStyle::round_toward_zero> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -145,7 +146,7 @@ struct NumericConverter<int32_t, float, FloatRoundStyle::round_to_nearest> {
     return (result_type)std::nearbyint(s);
   }
 
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -162,7 +163,7 @@ struct NumericConverter<int32_t, float, FloatRoundStyle::round_toward_zero> {
     return (result_type)std::nearbyint(s);
   }
 
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -192,7 +193,7 @@ struct NumericConverter<int8_t, float, FloatRoundStyle::round_to_nearest> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -214,7 +215,7 @@ struct NumericConverter<int8_t, float, FloatRoundStyle::round_toward_zero> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -241,7 +242,7 @@ struct NumericConverter<int8_t, float, FloatRoundStyle::round_to_nearest> {
     return static_cast<result_type>(intermediate);
   }
 
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -266,7 +267,7 @@ struct NumericConverter<int8_t, float, FloatRoundStyle::round_toward_zero> {
     return static_cast<result_type>(intermediate);
   }
 
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -290,7 +291,7 @@ struct NumericConverter<T, T, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -318,7 +319,7 @@ struct NumericConverter<float, half_t, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -340,7 +341,7 @@ struct NumericConverter<half_t, float, FloatRoundStyle::round_to_nearest> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -409,7 +410,7 @@ struct NumericConverter<half_t, float, FloatRoundStyle::round_toward_zero> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -435,7 +436,7 @@ struct NumericConverter<float, bfloat16_t, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -452,7 +453,7 @@ struct NumericConverter<bfloat16_t, float, FloatRoundStyle::round_to_nearest> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -482,7 +483,7 @@ struct NumericConverter<bfloat16_t, float, FloatRoundStyle::round_half_ulp_trunc
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -503,7 +504,7 @@ struct NumericConverter<bfloat16_t, float, FloatRoundStyle::round_toward_zero> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -529,7 +530,7 @@ struct NumericConverter<float, tfloat32_t, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -545,6 +546,9 @@ struct NumericConverter<tfloat32_t, float, FloatRoundStyle::round_to_nearest> {
 
     unsigned storage = reinterpret_cast<unsigned const &>(s);
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    asm volatile("cvt.rn.tf32.f32 %0, %1;" : "=r"(storage) : "r"(storage));
+#else
     if ((storage & 0x7f800000) != 0x7f800000) {
 
       bool mantissa_bit = ((storage & (1 << 13)) != 0);
@@ -570,12 +574,13 @@ struct NumericConverter<tfloat32_t, float, FloatRoundStyle::round_to_nearest> {
     else if (storage & ~0xff800000) {
       storage = 0x7fffffff;
     }
+#endif
 
     return tfloat32_t::bitcast(storage);
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -592,7 +597,7 @@ struct NumericConverter<tfloat32_t, float, FloatRoundStyle::round_half_ulp_trunc
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -617,7 +622,7 @@ struct NumericConverter<tfloat32_t, float, FloatRoundStyle::round_half_ulp_trunc
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -635,7 +640,7 @@ struct NumericConverter<tfloat32_t, float, FloatRoundStyle::round_toward_zero> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -678,7 +683,7 @@ struct NumericConverterFastF32 {
   }
 
   CUTLASS_HOST_DEVICE
-    result_type operator()(source_type const &s) {
+    result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -711,7 +716,29 @@ struct NumericConverterClamp {
   }
 
   CUTLASS_HOST_DEVICE
-    result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
+    return convert(s);
+  }
+};
+
+// This converter is needed to enable half_t output types when using int32_t accumulators.
+// Since floating-point types do not require a clamp, this converter simply casts from
+// the source type to half_t.
+template <
+  typename S
+>
+struct NumericConverterClamp<cutlass::half_t, S> {
+
+  using result_type = cutlass::half_t;
+  using source_type = S;
+
+  CUTLASS_HOST_DEVICE
+  static result_type convert(source_type const &source) {
+    return static_cast<cutlass::half_t>(source);
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -748,8 +775,7 @@ struct NumericArrayConverter {
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
-      if( platform::is_same<Transform, cutlass::transform::thread::UnaryTransform::Identity>::value )
-      {
+      if (platform::is_same<Transform, cutlass::transform::thread::UnaryTransform::Identity>::value) {
         result[i] = convert_(s[i]);
       } else { // conjugate
         result[i] = conj(convert_(s[i]));
@@ -760,7 +786,7 @@ struct NumericArrayConverter {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -782,20 +808,23 @@ struct NumericArrayConverter<T, T, N, Round, Transform> {
                   "Unary Operator not supported.");
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
-      if( platform::is_same<Transform, cutlass::transform::thread::UnaryTransform::Identity>::value )
-      {
-          return s;
-      } else {
-          result_type result;
-          for (int i = 0; i < N; ++i) {
-              result[i] = conj(s[i]);
-          }
-          return result;
+  static result_type convert(source_type const &source) {
+    if (platform::is_same<Transform, cutlass::transform::thread::UnaryTransform::Identity>::value) {
+      return source;
+    } else {
+      result_type result;
+      for (int i = 0; i < N; ++i) {
+          result[i] = conj(source[i]);
       }
+      return result;
+    }
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
   }
 };
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -824,7 +853,7 @@ struct NumericArrayConverter<half_t, float, 2, FloatRoundStyle::round_to_nearest
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -854,7 +883,7 @@ struct NumericArrayConverter<float, half_t, 2, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -896,7 +925,7 @@ struct NumericArrayConverter<half_t, float, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -937,11 +966,10 @@ struct NumericArrayConverter<float, half_t, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -967,12 +995,10 @@ struct NumericArrayConverter<bfloat16_t, float, 2, FloatRoundStyle::round_to_nea
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Partial specialization for Array<bfloat16_t> <= Array<float>
 template <
@@ -1009,7 +1035,7 @@ struct NumericArrayConverter<bfloat16_t, float, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1045,7 +1071,7 @@ struct NumericArrayConverter<int8_t, int, 1, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1074,7 +1100,7 @@ struct NumericArrayConverter<int8_t, int, 2, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1105,7 +1131,7 @@ struct NumericArrayConverter<int8_t, int, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1141,7 +1167,7 @@ struct NumericArrayConverter<int8_t, int, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1168,7 +1194,7 @@ struct NumericArrayConverter<uint8_t, int, 1, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1197,7 +1223,7 @@ struct NumericArrayConverter<uint8_t, int, 2, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1228,7 +1254,7 @@ struct NumericArrayConverter<uint8_t, int, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1264,7 +1290,7 @@ struct NumericArrayConverter<uint8_t, int, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1327,7 +1353,7 @@ struct NumericArrayConverter<float, float_e4m3_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1375,7 +1401,7 @@ struct NumericArrayConverter<float_e4m3_t, float, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1430,7 +1456,7 @@ struct NumericArrayConverter<float, float_e5m2_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1478,7 +1504,7 @@ struct NumericArrayConverter<float_e5m2_t, float, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1529,7 +1555,7 @@ struct NumericArrayConverter<half_t, float_e4m3_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1578,7 +1604,7 @@ struct NumericArrayConverter<float_e4m3_t, half_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1623,7 +1649,7 @@ struct NumericArrayConverter<half_t, float_e5m2_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1672,7 +1698,7 @@ struct NumericArrayConverter<float_e5m2_t, half_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1726,7 +1752,7 @@ struct NumericArrayConverter<bfloat16_t, float_e4m3_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1772,7 +1798,7 @@ struct NumericArrayConverter<float_e4m3_t, bfloat16_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1820,7 +1846,7 @@ struct NumericArrayConverter<bfloat16_t, float_e5m2_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1866,7 +1892,7 @@ struct NumericArrayConverter<float_e5m2_t, bfloat16_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1903,7 +1929,7 @@ struct NumericArrayConverter<float_e4m3_t, float_e5m2_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1934,7 +1960,7 @@ struct NumericArrayConverter<float_e5m2_t, float_e4m3_t, 4, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -1964,8 +1990,13 @@ struct NumericArrayConverter<float_e4m3_t, float_e4m3_t, 4, Round> {
   static FloatRoundStyle const round_style = Round;
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
-    return s;
+  static result_type convert(source_type const &source) {
+    return source;
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
   }
 };
 
@@ -1982,14 +2013,19 @@ struct NumericArrayConverter<float_e5m2_t, float_e5m2_t, 4, Round> {
   static FloatRoundStyle const round_style = Round;
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
-    return s;
+  static result_type convert(source_type const &source) {
+    return source;
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
   }
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Partial specialziations for:
+// Partial specializations for:
 //       Array<T, N> <=> Array<float_e4m3_t, N>
 //       Array<T, N> <=> Array<float_e5m2_t, N>
 // using packed converter under the hood
@@ -2041,7 +2077,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const{
     return convert(s);
   }
 };
@@ -2143,7 +2179,7 @@ struct NumericArrayConverter<int8_t, float, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -2184,7 +2220,7 @@ struct NumericArrayConverter<int4b_t, int, 8, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -2220,7 +2256,7 @@ struct NumericArrayConverter<int4b_t, int, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -2255,7 +2291,7 @@ struct NumericArrayConverter<uint4b_t, int, 8, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -2291,7 +2327,7 @@ struct NumericArrayConverter<uint4b_t, int, N, Round> {
   }
 
   CUTLASS_HOST_DEVICE
-  result_type operator()(source_type const &s) {
+  result_type operator()(source_type const &s) const {
     return convert(s);
   }
 };
@@ -2319,7 +2355,7 @@ struct FastNumericArrayConverter {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) { return convert(s); }
+  result_type operator()(source_type const &s) const { return convert(s); }
 };
 
 /// Partial specialization for Array<float> <= Array<int>
@@ -2343,7 +2379,7 @@ struct FastNumericArrayConverter<float, T, N, Round> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) { return convert(s); }
+  result_type operator()(source_type const &s) const { return convert(s); }
 };
 
 /// Partial specialization for Array<int8_t, 4> <= Array<float, 4>
@@ -2371,7 +2407,7 @@ struct FastNumericArrayConverter<int8_t, float, 4, Round> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) { return convert(s); }
+  result_type operator()(source_type const &s) const { return convert(s); }
 };
 
 /// Partial specialization for Array<int8_t> <= Array<float>
@@ -2403,7 +2439,7 @@ struct FastNumericArrayConverter<int8_t, float, N, Round> {
   }
 
   CUTLASS_DEVICE
-  result_type operator()(source_type const &s) { return convert(s); }
+  result_type operator()(source_type const &s) const { return convert(s); }
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2414,11 +2450,13 @@ struct PreferredRoundingMode {
   static FloatRoundStyle const kRound = FloatRoundStyle::round_to_nearest;
 };
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 900
 /// Defines preferred rounding mode for a pair of types
 template <>
 struct PreferredRoundingMode<tfloat32_t, float> {
   static FloatRoundStyle const kRound = FloatRoundStyle::round_half_ulp_truncate;
 };
+#endif
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

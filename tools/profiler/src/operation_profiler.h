@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,9 @@
 #include <string>
 #include <memory>
 #include <unordered_map>
+
+// CUTLASS includes
+#include "cutlass/trace.h"
 
 // CUTLASS Library includes
 #include "cutlass/library/library.h"
@@ -81,7 +84,7 @@ protected:
   /// List of providers used to verify and compare each result
   ProviderVector verification_providers_;
 
-  /// Model performance result initailized by the operation profiler with workload statistics
+  /// Model performance result initialized by the operation profiler with workload statistics
   /// and reasonable default state.
   PerformanceResult model_result_;
 

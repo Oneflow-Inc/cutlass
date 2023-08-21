@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,6 @@
 #include "cutlass/functional.h"
 #include "cutlass/numeric_types.h"
 #include "cutlass/half.h"
-
 namespace cutlass {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -455,6 +454,11 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
+  const_iterator begin() const {
+    return cbegin();
+  }
+
+  CUTLASS_HOST_DEVICE
   const_iterator cbegin() const {
     return const_iterator(storage);
   }
@@ -462,6 +466,11 @@ public:
   CUTLASS_HOST_DEVICE
   iterator end() {
     return iterator(reinterpret_cast<pointer>(storage + kStorageElements));
+  }
+
+  CUTLASS_HOST_DEVICE
+  const_iterator end() const {
+    return cend();
   }
 
   CUTLASS_HOST_DEVICE
@@ -475,6 +484,11 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
+  const_reverse_iterator rbegin() const {
+    return crbegin();
+  }
+
+  CUTLASS_HOST_DEVICE
   const_reverse_iterator crbegin() const {
     return const_reverse_iterator(reinterpret_cast<const_pointer>(storage + kStorageElements));
   }
@@ -482,6 +496,11 @@ public:
   CUTLASS_HOST_DEVICE
   reverse_iterator rend() {
     return reverse_iterator(reinterpret_cast<pointer>(storage));
+  }
+
+  CUTLASS_HOST_DEVICE
+  const_reverse_iterator rend() const {
+    return crend();
   }
 
   CUTLASS_HOST_DEVICE
@@ -698,6 +717,27 @@ struct multiplies<Array<T, N>> {
 };
 
 template <typename T, int N>
+struct scale<Array<T, N>> {
+  T const scaling_factor_;
+
+  CUTLASS_HOST_DEVICE
+  scale(T scaling_factor) : scaling_factor_(scaling_factor) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const & rhs) const {
+    Array<T, N> result;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = rhs[i] * scaling_factor_;
+    }
+
+    return result;
+  }
+};
+
+template <typename T, int N>
 struct divides<Array<T, N>> {
 
   CUTLASS_HOST_DEVICE
@@ -744,13 +784,13 @@ struct divides<Array<T, N>> {
 };
 
 template <typename T, int N>
-struct maximum<Array<T, N>> {
+struct maximum<Array<T, N>, false> {
 
   CUTLASS_HOST_DEVICE
   Array<T, N> operator()(Array<T, N> const &lhs, Array<T, N> const &rhs) const {
 
     Array<T, N> result;
-    maximum<T> scalar_op;
+    maximum<T, false> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -764,7 +804,7 @@ struct maximum<Array<T, N>> {
   Array<T, N> operator()(Array<T, N> const &lhs, T const &scalar) const {
 
     Array<T, N> result;
-    maximum<T> scalar_op;
+    maximum<T, false> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -775,10 +815,10 @@ struct maximum<Array<T, N>> {
   }
 
   CUTLASS_HOST_DEVICE
-  Array<T, N> operator()( T const &scalar, Array<T, N> const &rhs) const {
+  Array<T, N> operator()(T const &scalar, Array<T, N> const &rhs) const {
 
     Array<T, N> result;
-    maximum<T> scalar_op;
+    maximum<T, false> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -790,18 +830,13 @@ struct maximum<Array<T, N>> {
 };
 
 template <typename T, int N>
-struct minimum<Array<T, N>> {
-
-  CUTLASS_HOST_DEVICE
-  static T scalar_op(T const &lhs, T const &rhs) {
-    return (rhs < lhs ? rhs : lhs);
-  }
+struct maximum<Array<T, N>, true> {
 
   CUTLASS_HOST_DEVICE
   Array<T, N> operator()(Array<T, N> const &lhs, Array<T, N> const &rhs) const {
 
     Array<T, N> result;
-    minimum<T> scalar_op;
+    maximum<T, true> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -815,7 +850,7 @@ struct minimum<Array<T, N>> {
   Array<T, N> operator()(Array<T, N> const &lhs, T const &scalar) const {
 
     Array<T, N> result;
-    minimum<T> scalar_op;
+    maximum<T, true> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -826,10 +861,112 @@ struct minimum<Array<T, N>> {
   }
 
   CUTLASS_HOST_DEVICE
-  Array<T, N> operator()( T const &scalar, Array<T, N> const &rhs) const {
+  Array<T, N> operator()(T const &scalar, Array<T, N> const &rhs) const {
 
     Array<T, N> result;
-    minimum<T> scalar_op;
+    maximum<T, true> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(scalar, rhs[i]);
+    }
+
+    return result;
+  }
+};
+
+template <typename T, int N>
+struct minimum<Array<T, N>, false> {
+
+  CUTLASS_HOST_DEVICE
+  static T scalar_op(T const &lhs, T const &rhs) {
+    return (rhs < lhs ? rhs : lhs);
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, Array<T, N> const &rhs) const {
+
+    Array<T, N> result;
+    minimum<T, false> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(lhs[i], rhs[i]);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, T const &scalar) const {
+
+    Array<T, N> result;
+    minimum<T, false> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(lhs[i], scalar);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(T const &scalar, Array<T, N> const &rhs) const {
+
+    Array<T, N> result;
+    minimum<T, false> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(scalar, rhs[i]);
+    }
+
+    return result;
+  }
+};
+
+template <typename T, int N>
+struct minimum<Array<T, N>, true> {
+
+  CUTLASS_HOST_DEVICE
+  static T scalar_op(T const &lhs, T const &rhs) {
+    return (rhs < lhs ? rhs : lhs);
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, Array<T, N> const &rhs) const {
+
+    Array<T, N> result;
+    minimum<T, true> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(lhs[i], rhs[i]);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, T const &scalar) const {
+
+    Array<T, N> result;
+    minimum<T, true> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(lhs[i], scalar);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(T const &scalar, Array<T, N> const &rhs) const {
+
+    Array<T, N> result;
+    minimum<T, true> scalar_op;
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
@@ -993,7 +1130,7 @@ struct plus<Array<half_t, N>> {
       result_ptr[i] = __hadd2(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
       __half d_residual = __hadd(a_residual_ptr[N - 1], b_residual_ptr[N - 1]);
@@ -1026,7 +1163,7 @@ struct plus<Array<half_t, N>> {
       result_ptr[i] = __hadd2(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
       __half d_residual = __hadd(reinterpret_cast<__half const &>(lhs), b_residual_ptr[N - 1]);
 
@@ -1058,7 +1195,7 @@ struct plus<Array<half_t, N>> {
       result_ptr[i] = __hadd2(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half d_residual = __hadd(a_residual_ptr[N - 1], reinterpret_cast<__half const &>(rhs));
 
@@ -1093,7 +1230,7 @@ struct minus<Array<half_t, N>> {
       result_ptr[i] = __hsub2(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
       __half d_residual = __hsub(a_residual_ptr[N - 1], b_residual_ptr[N - 1]);
@@ -1126,7 +1263,7 @@ struct minus<Array<half_t, N>> {
       result_ptr[i] = __hsub2(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
       __half d_residual = __hsub(reinterpret_cast<__half const &>(lhs), b_residual_ptr[N - 1]);
 
@@ -1158,7 +1295,7 @@ struct minus<Array<half_t, N>> {
       result_ptr[i] = __hsub2(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half d_residual = __hsub(a_residual_ptr[N - 1], reinterpret_cast<__half const &>(rhs));
 
@@ -1193,7 +1330,7 @@ struct multiplies<Array<half_t, N>> {
       result_ptr[i] = __hmul2(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
       __half d_residual = __hmul(a_residual_ptr[N - 1], b_residual_ptr[N - 1]);
@@ -1226,7 +1363,7 @@ struct multiplies<Array<half_t, N>> {
       result_ptr[i] = __hmul2(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
       __half d_residual = __hmul(
@@ -1261,7 +1398,7 @@ struct multiplies<Array<half_t, N>> {
       result_ptr[i] = __hmul2(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
 
       __half d_residual = __hmul(
@@ -1299,7 +1436,7 @@ struct divides<Array<half_t, N>> {
       result_ptr[i] = __h2div(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
@@ -1335,7 +1472,7 @@ struct divides<Array<half_t, N>> {
       result_ptr[i] = __h2div(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
       __half d_residual = __hdiv(
@@ -1370,7 +1507,7 @@ struct divides<Array<half_t, N>> {
       result_ptr[i] = __h2div(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
 
       __half d_residual = __hdiv(
@@ -1407,7 +1544,7 @@ struct negate<Array<half_t, N>> {
       result_ptr[i] = __hneg2(source_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       half_t x = lhs[N - 1];
       __half lhs_val = -reinterpret_cast<__half const &>(x);
       result[N - 1] = reinterpret_cast<half_t const &>(lhs_val);
@@ -1448,7 +1585,7 @@ struct multiply_add<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> {
       result_ptr[i] = __hfma2(a_ptr[i], b_ptr[i], c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
@@ -1494,7 +1631,7 @@ struct multiply_add<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> {
       result_ptr[i] = __hfma2(a_pair, b_ptr[i], c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
       __half const *c_residual_ptr = reinterpret_cast<__half const *>(&c);
@@ -1538,7 +1675,7 @@ struct multiply_add<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> {
       result_ptr[i] = __hfma2(a_ptr[i], b_pair, c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *c_residual_ptr = reinterpret_cast<__half const *>(&c);
@@ -1583,7 +1720,7 @@ struct multiply_add<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> {
       result_ptr[i] = __hfma2(a_ptr[i], b_ptr[i], c_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
@@ -1633,7 +1770,7 @@ struct multiply_add_relu0<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> 
       result_ptr[i] = __hfma2_relu(a_ptr[i], b_ptr[i], c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
@@ -1680,7 +1817,7 @@ struct multiply_add_relu0<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> 
       result_ptr[i] = __hfma2_relu(a_pair, b_ptr[i], c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
       __half const *c_residual_ptr = reinterpret_cast<__half const *>(&c);
@@ -1725,7 +1862,7 @@ struct multiply_add_relu0<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> 
       result_ptr[i] = __hfma2_relu(a_ptr[i], b_pair, c_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *c_residual_ptr = reinterpret_cast<__half const *>(&c);
@@ -1771,7 +1908,7 @@ struct multiply_add_relu0<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> 
       result_ptr[i] = __hfma2_relu(a_ptr[i], b_ptr[i], c_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&b);
@@ -1800,7 +1937,7 @@ struct multiply_add_relu0<Array<half_t, N>, Array<half_t, N>, Array<half_t, N>> 
 };
 
 template <int N>
-struct minimum<Array<half_t, N>> {
+struct minimum<Array<half_t, N>, false> {
   CUTLASS_HOST_DEVICE
   Array<half_t, N> operator()(Array<half_t, N> const & lhs, Array<half_t, N> const &rhs) const {
     Array<half_t, N> result;
@@ -1815,7 +1952,7 @@ struct minimum<Array<half_t, N>> {
       result_ptr[i] = __hmin2(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
@@ -1851,7 +1988,7 @@ struct minimum<Array<half_t, N>> {
       result_ptr[i] = __hmin2(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
       __half d_residual = __hmin(
@@ -1886,7 +2023,7 @@ struct minimum<Array<half_t, N>> {
       result_ptr[i] = __hmin2(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
 
       __half d_residual = __hmin(
@@ -1909,7 +2046,7 @@ struct minimum<Array<half_t, N>> {
 };
 
 template <int N>
-struct maximum<Array<half_t, N>> {
+struct maximum<Array<half_t, N>, false> {
   CUTLASS_HOST_DEVICE
   Array<half_t, N> operator()(Array<half_t, N> const & lhs, Array<half_t, N> const &rhs) const {
     Array<half_t, N> result;
@@ -1924,7 +2061,7 @@ struct maximum<Array<half_t, N>> {
       result_ptr[i] = __hmax2(lhs_ptr[i], rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
@@ -1960,7 +2097,7 @@ struct maximum<Array<half_t, N>> {
       result_ptr[i] = __hmax2(lhs_pair, rhs_ptr[i]);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *b_residual_ptr = reinterpret_cast<__half const *>(&rhs);
 
       __half d_residual = __hmax(
@@ -1995,7 +2132,7 @@ struct maximum<Array<half_t, N>> {
       result_ptr[i] = __hmax2(lhs_ptr[i], rhs_pair);
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
       __half const *a_residual_ptr = reinterpret_cast<__half const *>(&lhs);
 
       __half d_residual = __hmax(
@@ -2043,7 +2180,7 @@ struct multiply_add<Array<bfloat16_t, N>, Array<bfloat16_t, N>, Array<bfloat16_t
       );
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       uint16_t *result_ptr = reinterpret_cast<uint16_t *>(&result);
       uint16_t const *a_residual_ptr = reinterpret_cast<uint16_t const *>(&a);
@@ -2094,7 +2231,7 @@ struct multiply_add<Array<bfloat16_t, N>, Array<bfloat16_t, N>, Array<bfloat16_t
       );
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       uint16_t *result_ptr = reinterpret_cast<uint16_t *>(&result);
       uint16_t const *a_residual_ptr = reinterpret_cast<uint16_t const *>(&a);
@@ -2145,7 +2282,7 @@ struct multiply_add<Array<bfloat16_t, N>, Array<bfloat16_t, N>, Array<bfloat16_t
       );
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       uint16_t *result_ptr = reinterpret_cast<uint16_t *>(&result);
       uint16_t const *a_residual_ptr = reinterpret_cast<uint16_t const *>(&a);
@@ -2196,7 +2333,7 @@ struct multiply_add<Array<bfloat16_t, N>, Array<bfloat16_t, N>, Array<bfloat16_t
       );
     }
 
-    if (N % 2) {
+    if constexpr (N % 2) {
 
       uint16_t *result_ptr = reinterpret_cast<uint16_t *>(&result);
       uint16_t const *a_residual_ptr = reinterpret_cast<uint16_t const *>(&a);

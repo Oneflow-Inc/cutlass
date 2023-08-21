@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -36,7 +36,11 @@
 
 #pragma once
 
+#if defined(__CUDACC_RTC__)
+#include <cuda/std/limits>
+#else
 #include <limits>
+#endif
 
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
@@ -99,14 +103,16 @@ protected:
   //
 
   // Device ordinal
-  thread_local static int device_ordinal_;
+  CUTLASS_THREAD_LOCAL static int device_ordinal_;
 
   /// Device SM count
-  thread_local static int device_sms_;
+  CUTLASS_THREAD_LOCAL static int device_sms_;
 
   /// Kernel SM occupancy (in thread blocks)
-  thread_local static int sm_occupancy_;
+  CUTLASS_THREAD_LOCAL static int sm_occupancy_;
 
+  /// Kernel dynamic shared memory allocation requirement
+  CUTLASS_THREAD_LOCAL static int smem_size_;
 
   /// Initialize static thread-local members for the thread's current device,
   /// if necessary.
@@ -138,15 +144,15 @@ protected:
     }
 
     // Update the kernel function's shared memory configuration for the current device
-    int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
-    if (smem_size >= (48 << 10))
-    {
-      // Requires more than 48KB: configure for extended, dynamic shared memory
+    smem_size_ = int(sizeof(typename GemmKernel::SharedStorage));
 
+    // If requires more than 48KB: configure for extended, dynamic shared memory
+    if (smem_size_ >= (48 << 10))
+    {
       cudart_result = cudaFuncSetAttribute(
         Kernel2<GemmKernel>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size);
+        smem_size_);
       if (cudart_result != cudaSuccess) {
         CUTLASS_TRACE_HOST("  cudaFuncSetAttribute() returned error " << cudaGetErrorString(cudart_result));
         return Status::kErrorInternal;
@@ -166,7 +172,7 @@ protected:
       &sm_occupancy_,
       Kernel2<GemmKernel>,
       GemmKernel::kThreadCount,
-      int(sizeof(typename GemmKernel::SharedStorage)),
+      smem_size_,
       cudaOccupancyDisableCachingOverride);
     if (cudart_result != cudaSuccess) {
       CUTLASS_TRACE_HOST("  cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags() returned error " << cudaGetErrorString(cudart_result));
@@ -179,7 +185,9 @@ protected:
     CUTLASS_TRACE_HOST("  "
       "device_ordinal: (" << device_ordinal_ << "), "
       "device_sms: (" << device_sms_ << "), "
-      "sm_occupancy: (" << sm_occupancy_ << ")");
+      "sm_occupancy: (" << sm_occupancy_ << ") "
+      "smem_size: (" << smem_size_ << ") "
+      "GemmKernel::kThreadCount: (" << GemmKernel::kThreadCount << ")");
 
     return Status::kSuccess;
   }
@@ -302,7 +310,7 @@ public:
   /// Initializes GEMM state from arguments and workspace memory
   Status initialize(
     Arguments const &args,
-    void *workspace,
+    void *workspace = nullptr,
     cudaStream_t stream = nullptr)
   {
     CUTLASS_TRACE_HOST("GemmUniversalBase::initialize() - workspace "
@@ -315,12 +323,15 @@ public:
     }
 
     // Assign and prepare workspace memory
-    return params_.init_workspace(workspace, stream);
+    if (args.mode == GemmUniversalMode::kGemm) {
+      return params_.init_workspace(workspace, stream);
+    }
+
+    return Status::kSuccess;
   }
 
 
-  /// Lightweight update given a subset of arguments.  Problem geometry is assumed to
-  /// remain the same.
+  /// Lightweight update given a subset of arguments.
   Status update(Arguments const &args)
   {
     CUTLASS_TRACE_HOST("GemmUniversalBase()::update()");
@@ -335,7 +346,6 @@ public:
     CUTLASS_TRACE_HOST("GemmUniversalBase::run()");
 
     // Configure grid and block dimensions
-    int smem_size = int(sizeof(typename GemmKernel::SharedStorage));
     dim3 block(GemmKernel::kThreadCount, 1, 1);
     dim3 grid = params_.get_grid_dims();
 
@@ -343,9 +353,9 @@ public:
     CUTLASS_TRACE_HOST("  "
       "grid: (" << grid << "), "
       "block: (" << block << "), "
-      "SMEM: (" << smem_size << ")");
+      "SMEM: (" << smem_size_ << ")");
 
-    Kernel2<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
+    Kernel2<GemmKernel><<<grid, block, smem_size_, stream>>>(params_);
 
     // Query for errors
     cudaError_t result = cudaGetLastError();
@@ -388,15 +398,20 @@ public:
 
 /// Device ordinal
 template <typename GemmKernel_>
-thread_local int GemmUniversalBase<GemmKernel_>::device_ordinal_ = -1;
+CUTLASS_THREAD_LOCAL int GemmUniversalBase<GemmKernel_>::device_ordinal_ = -1;
 
 /// Device SM count
 template <typename GemmKernel_>
-thread_local int GemmUniversalBase<GemmKernel_>::device_sms_ = -1;
+CUTLASS_THREAD_LOCAL int GemmUniversalBase<GemmKernel_>::device_sms_ = -1;
 
 /// Kernel SM occupancy (in thread blocks)
 template <typename GemmKernel_>
-thread_local int GemmUniversalBase<GemmKernel_>::sm_occupancy_ = -1;
+CUTLASS_THREAD_LOCAL int GemmUniversalBase<GemmKernel_>::sm_occupancy_ = -1;
+
+/// Kernel dynamic shared memory allocation requirement
+template <typename GemmKernel_>
+CUTLASS_THREAD_LOCAL int GemmUniversalBase<GemmKernel_>::smem_size_ = -1;
+
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

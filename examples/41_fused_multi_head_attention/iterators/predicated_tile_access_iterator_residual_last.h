@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights
  *reserved. SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -175,13 +175,13 @@ class PredicatedTileAccessIteratorResidualLast<
   Mask residual_tile_mask;
 
   /// Parameters object with precomputed internal state
-  Params const& params_;
+  Params params_;
 
   /// Internal pointer to first access of tile
   BytePointer pointer_;
 
   /// Below is used when Gather is turned on.  We need to record strided_offset
-  /// and contiguous_offset seperated to compute the offset by using
+  /// and contiguous_offset separated to compute the offset by using
   ///
   /// offset = contiguous_offset + indices[strided_offset]
   ///
@@ -1018,7 +1018,7 @@ class PredicatedTileAccessIteratorResidualLast<
   //
 
   /// Parameters object with precomputed internal state
-  Params const& params_;
+  Params params_;
 
   /// Internal pointer to first access of tile
   BytePointer pointer_;

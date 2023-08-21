@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,9 +35,25 @@
 */
 #pragma once
 
-#include <cuda_fp16.h>
+// FP8 types are available starting CUDA 11.8+
+#if (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
+#define CUDA_FP8_ENABLED 1
+#endif
 
-#include "cutlass/cutlass.h"
+#if defined(__CUDA_ARCH__)
+#  if (__CUDA_ARCH__ >= 900)
+#    if (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
+#      define CUDA_PTX_FP8_CVT_ENABLED 1
+#    endif // (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
+#  endif // (__CUDA_ARCH__ >= 900)
+#endif // defined(__CUDA_ARCH__)
+
+#ifdef __GNUC__
+// Ignore checks on reinterpret-casts that are being used for bitcasts.
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#endif
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #if defined(__CUDACC_RTC__)
 
@@ -53,18 +69,13 @@
 #include <cstring>
 #endif
 
+#ifdef CUDA_FP8_ENABLED
+#include <cuda_fp8.h>
+#endif
+#include <cuda_fp16.h>
+
+#include "cutlass/cutlass.h"
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
-#if (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
-
-#ifndef CUDA_PTX_FP8_CVT_ENABLED
-#define CUDA_PTX_FP8_CVT_ENABLED 1
-#endif
-
-#endif
-#endif
-
 
 namespace cutlass {
 
@@ -397,7 +408,7 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
 
         return *reinterpret_cast<float_e4m3_t *>(&tmp);
     #else
-        return bitcast(Base::convert_float_to_fp8(float(flt)));
+        return bitcast(Base::convert_float_to_fp8(__half2float(flt)));
     #endif
     }
 
@@ -411,7 +422,7 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
 
         return reinterpret_cast<half2 const &>(packed).x;
     #else
-        return half(Base::convert_fp8_to_float(x.storage));
+        return __float2half(Base::convert_fp8_to_float(x.storage));
     #endif
     }
 
@@ -423,7 +434,7 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
         uint32_t packed;
         asm volatile("cvt.rn.f16x2.e4m3x2 %0, %1;\n" : "=r"(packed) : "h"(bits));
 
-        return float(reinterpret_cast<half2 const &>(packed).x);
+        return __half2float(reinterpret_cast<half2 const &>(packed).x);
     #else
         return Base::convert_fp8_to_float(x.storage);
     #endif
@@ -433,20 +444,16 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
     // Methods
     //
 
-    /// Default constructor
-    CUTLASS_HOST_DEVICE
-    float_e4m3_t() : Base() { }
+    /// Constructor inheritance
+    using Base::Base;
 
-    /// Reinterpret cast from CUDA's FP8 type
+#ifdef CUDA_FP8_ENABLED
+    /// Conversion from CUDA's FP8 type
     CUTLASS_HOST_DEVICE
-    float_e4m3_t(float_e4m3_t const& x) {
-    #if defined(__CUDA_ARCH__)
-        storage = reinterpret_cast<uint8_t const &>(x);
-    #else
-        uint8_t raw = x.storage;
-        std::memcpy(&storage, &raw, sizeof(storage));
-    #endif
+    explicit float_e4m3_t(__nv_fp8_e4m3 x) {
+        storage = x.__x;
     }
+#endif
 
     /// Floating point conversion
     CUTLASS_HOST_DEVICE
@@ -473,17 +480,14 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
     CUTLASS_HOST_DEVICE
     explicit float_e4m3_t(float_e5m2_t x);
 
-    /// Assignment
+#ifdef CUDA_FP8_ENABLED
+    /// Assignment from CUDA's FP8 type
     CUTLASS_HOST_DEVICE
-    float_e4m3_t & operator=(float_e4m3_t const &x) {
-    #if defined(__CUDA_ARCH__)
-        storage = reinterpret_cast<uint8_t const &>(x);
-    #else
-        uint8_t raw = x.storage;
-        std::memcpy(&storage, &raw, sizeof(storage));
-    #endif
+    float_e4m3_t & operator=(__nv_fp8_e4m3 x) {
+        storage = x.__x;
         return *this;
     }
+#endif
 
     /// Converts to float
     CUTLASS_HOST_DEVICE
@@ -559,7 +563,6 @@ struct alignas(1) float_e4m3_t : float8_base<FloatEncoding::E4M3> {
         return int(storage & Base::FP8_MANTISSA_MASK);
     }
 };
-
 ///////////////////////////////////////////////////////////////
 ///
 /// floating-point 8 type : E5M2
@@ -607,7 +610,7 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
 
         return *reinterpret_cast<float_e5m2_t *>(&tmp);
     #else
-        return bitcast(Base::convert_float_to_fp8(float(flt)));
+        return bitcast(Base::convert_float_to_fp8(__half2float(flt)));
     #endif
     }
 
@@ -621,7 +624,7 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
 
         return reinterpret_cast<half2 const &>(packed).x;
     #else
-        return half(Base::convert_fp8_to_float(x.storage));
+        return __float2half(Base::convert_fp8_to_float(x.storage));
     #endif
     }
 
@@ -633,7 +636,7 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
         uint32_t packed;
         asm volatile("cvt.rn.f16x2.e5m2x2 %0, %1;\n" : "=r"(packed) : "h"(bits));
 
-        return float(reinterpret_cast<half2 const &>(packed).x);
+        return __half2float(reinterpret_cast<half2 const &>(packed).x);
     #else
         return Base::convert_fp8_to_float(x.storage);
     #endif
@@ -643,20 +646,16 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
     // Methods
     //
 
-    /// Default constructor
-    CUTLASS_HOST_DEVICE
-    float_e5m2_t() : Base() { }
+    /// Constructor inheritance
+    using Base::Base;
 
-    /// Reinterpret cast from CUDA's FP8 type
+#ifdef CUDA_FP8_ENABLED
+    /// Conversion from CUDA's FP8 type
     CUTLASS_HOST_DEVICE
-    float_e5m2_t(float_e5m2_t const& x) {
-    #if defined(__CUDA_ARCH__)
-        storage = reinterpret_cast<uint8_t const &>(x);
-    #else
-        uint8_t raw = x.storage;
-        std::memcpy(&storage, &raw, sizeof(storage));
-    #endif
+    explicit float_e5m2_t(__nv_fp8_e5m2 x) {
+        storage = x.__x;
     }
+#endif
 
     /// Floating point conversion
     CUTLASS_HOST_DEVICE
@@ -683,17 +682,14 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
     CUTLASS_HOST_DEVICE
     explicit float_e5m2_t(float_e4m3_t x);
 
-    /// Assignment
+#ifdef CUDA_FP8_ENABLED
+    /// Assignment from CUDA's FP8 type
     CUTLASS_HOST_DEVICE
-    float_e5m2_t & operator=(float_e5m2_t const &x) {
-    #if defined(__CUDA_ARCH__)
-        storage = reinterpret_cast<uint8_t const &>(x);
-    #else
-        uint8_t raw = x.storage;
-        std::memcpy(&storage, &raw, sizeof(storage));
-    #endif
+    float_e5m2_t & operator=(__nv_fp8_e5m2 x) {
+        storage = x.__x;
         return *this;
     }
+#endif
 
     /// Converts to float
     CUTLASS_HOST_DEVICE
@@ -769,7 +765,6 @@ struct alignas(1) float_e5m2_t : float8_base<FloatEncoding::E5M2> {
         return int(storage & Base::FP8_MANTISSA_MASK);
     }
 };
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Arithmetic operators
@@ -1084,7 +1079,7 @@ struct numeric_limits<cutlass::float_e4m3_t> :
   /// Minimum finite value
   static cutlass::float_e4m3_t lowest() { return cutlass::float_e4m3_t::bitcast(0xfe); }
 
-  /// Returns smallest finite value
+  /// Machine epsilon, that is, the difference between 1.0 and the next representable value
   static cutlass::float_e4m3_t epsilon() { return cutlass::float_e4m3_t::bitcast(0x20); }
 };
 
@@ -1097,7 +1092,7 @@ struct numeric_limits<cutlass::float_e5m2_t>  :
   /// Minimum finite value
   static cutlass::float_e5m2_t lowest() { return cutlass::float_e5m2_t::bitcast(0xfb); }
 
-  /// Returns smallest finite value
+  /// Machine epsilon, that is, the difference between 1.0 and the next representable value
   static cutlass::float_e5m2_t epsilon() { return cutlass::float_e5m2_t::bitcast(0x34); }
 };
 
@@ -1165,7 +1160,7 @@ struct numeric_limits<cutlass::float_e4m3_t> :
   /// Minimum finite value
   static cutlass::float_e4m3_t lowest() { return cutlass::float_e4m3_t::bitcast(0xfe); }
 
-  /// Returns smallest finite value
+  /// Machine epsilon, that is, the difference between 1.0 and the next representable value
   static cutlass::float_e4m3_t epsilon() { return cutlass::float_e4m3_t::bitcast(0x20); }
 };
 
@@ -1178,7 +1173,7 @@ struct numeric_limits<cutlass::float_e5m2_t>  :
   /// Minimum finite value
   static cutlass::float_e5m2_t lowest() { return cutlass::float_e5m2_t::bitcast(0xfb); }
 
-  /// Returns smallest finite value
+  /// Machine epsilon, that is, the difference between 1.0 and the next representable value
   static cutlass::float_e5m2_t epsilon() { return cutlass::float_e5m2_t::bitcast(0x34); }
 };
 

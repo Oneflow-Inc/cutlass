@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -198,7 +198,7 @@ public:
       lda(lda), ldb(ldb), ldc1(ldc1), ldc2(ldc2), ldd(ldd), ldr(ldr), ldt(ldt)
     {
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Arguments::Arguments() - problem_size: " << problem_size);
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
       CUTLASS_TRACE_HOST("  ldt: " << this->ldt);
@@ -228,14 +228,18 @@ public:
     ThreadblockShape,
     ElementA,
     ElementB,
-    ElementC>
+    ElementC,
+    LayoutA,
+    LayoutB>
   {
     using ParamsBase = UniversalParamsBase<
       ThreadblockSwizzle,
       ThreadblockShape,
       ElementA,
       ElementB,
-      ElementC>;
+      ElementC,
+      LayoutA,
+      LayoutB>;
 
     //
     // Data members
@@ -304,14 +308,13 @@ public:
       batch_stride_Tensor(args.batch_stride_Tensor)
     {
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params() - problem_size: " << problem_size);
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
       CUTLASS_TRACE_HOST("  ldt: " << args.ldt);
     }
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     CUTLASS_HOST_DEVICE
     void update(Arguments const &args)
     {
@@ -325,10 +328,18 @@ public:
       ldr = args.ldr;
       ptr_Tensor = args.ptr_Tensor;
 
+      batch_stride_A = args.batch_stride_A;
+      batch_stride_B = args.batch_stride_B;
+      batch_stride_C1 = args.batch_stride_C1;
+      batch_stride_C2 = args.batch_stride_C2;
+      batch_stride_Vector = args.batch_stride_Vector;
+      batch_stride_Tensor = args.batch_stride_Tensor;
+      this->batch_stride_D = args.batch_stride_D;
+
       output_op = args.epilogue;
 
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::update()");
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
     }
@@ -918,7 +929,7 @@ public:
       lda(lda), ldb(ldb), ldc(ldc), ldd(ldd), ldr(ldr), ldt(ldt)
     {
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Arguments::Arguments() - problem_size: " << problem_size);
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
       CUTLASS_TRACE_HOST("  ldt: " << this->ldt);
@@ -948,14 +959,18 @@ public:
     ThreadblockShape,
     ElementA,
     ElementB,
-    ElementC>
+    ElementC,
+    LayoutA,
+    LayoutB>
   {
     using ParamsBase = UniversalParamsBase<
       ThreadblockSwizzle,
       ThreadblockShape,
       ElementA,
       ElementB,
-      ElementC>;
+      ElementC,
+      LayoutA,
+      LayoutB>;
 
     //
     // Data members
@@ -1019,14 +1034,13 @@ public:
       batch_stride_Tensor(args.batch_stride_Tensor)
     {
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params() - problem_size: " << problem_size);
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
       CUTLASS_TRACE_HOST("  ldt: " << args.ldt);
     }
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     CUTLASS_HOST_DEVICE
     void update(Arguments const &args)
     {
@@ -1039,10 +1053,17 @@ public:
       ldr = args.ldr;
       ptr_Tensor = args.ptr_Tensor;
 
+      batch_stride_A = args.batch_stride_A;
+      batch_stride_B = args.batch_stride_B;
+      batch_stride_C = args.batch_stride_C;
+      batch_stride_Vector = args.batch_stride_Vector;
+      batch_stride_Tensor = args.batch_stride_Tensor;
+      this->batch_stride_D = args.batch_stride_D;
+
       output_op = args.epilogue;
 
       CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::update()");
-      CUTLASS_TRACE_HOST("  ptr_Reduction: " << (void *)this->ptr_Reduction);
+      CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
     }
@@ -1222,7 +1243,7 @@ public:
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
-    int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+    int warp_idx = canonical_warp_idx_sync();
 
     int lane_idx = threadIdx.x % 32;
 

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -157,10 +157,7 @@ public:
     // accuracy, where each mainloop iteration first accumulates into a temporary
     // set of freshly-cleared accumulators, which are subsequently added to the
     // final accumulator set.
-    static bool const kStagedAccumulation =
-      platform::is_same<typename Operator::MathOperator, arch::OpMultiplyAddFastF32>::value ||
-      platform::is_same<typename Operator::MathOperator, arch::OpMultiplyAddComplexFastF32>::value;
-
+    static bool const kStagedAccumulation = arch::UseStagedAccumulation<typename Operator::MathOperator>::value;
   };
 
  private:
@@ -663,12 +660,10 @@ public:
       accum = plus_accum(accum, pipe_state.tmp_accum_);
     }
 
-    // Optionally commit and drain all pending and predicated LDGSTS pnz from the GEMM mainloop
-    if (SharedMemoryClear == SharedMemoryClearOption::kZfill) {
-      cutlass::arch::cp_async_fence();
-      cutlass::arch::cp_async_wait<0>();
-      __syncthreads();
-    }
+    // Commit and drain all pending and predicated cp.async pnz from the GEMM mainloop
+    cutlass::arch::cp_async_fence();
+    cutlass::arch::cp_async_wait<0>();
+    __syncthreads();
 
   }
 

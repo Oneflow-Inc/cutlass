@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,7 +62,7 @@ struct GpuTimer {
   /// Records a stop event in the stream and synchronizes on the stream
   void stop_and_wait(cudaStream_t stream = nullptr);
 
-  /// Returns the duration in miliseconds
+  /// Returns the duration in milliseconds
   double duration(int iterations = 1) const;
 };
 

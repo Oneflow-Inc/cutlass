@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -93,8 +93,9 @@ public:
     library::NumericTypeID type, 
     library::LayoutTypeID layout_id, 
     std::vector<int> const &extent, 
-    std::vector<int64_t> const &stride = std::vector<int64_t>(),
-    int batch_count = 1);
+    std::vector<int64_t> const &stride,
+    int batch_count,
+    int seed_shift = 0);
 
   /// Allocates memory for sparse meta data 
   DeviceAllocation *allocate_sparsemeta_tensor(
@@ -104,8 +105,9 @@ public:
     library::LayoutTypeID layout_id, 
     library::NumericTypeID type_a,
     std::vector<int> const &extent, 
-    std::vector<int64_t> const &stride = std::vector<int64_t>(),
-    int batch_count = 1);
+    std::vector<int64_t> const &stride,
+    int batch_count,
+    int seed_shift = 0);
 
   /// Clears named allocations (but does not necessarily free memory)
   void clear();

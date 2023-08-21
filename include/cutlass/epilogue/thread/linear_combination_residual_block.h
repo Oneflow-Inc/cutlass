@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,7 @@
 #include "cutlass/array.h"
 #include "cutlass/functional.h"
 #include "cutlass/numeric_conversion.h"
+#include "cutlass/epilogue/thread/detail.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -45,21 +46,15 @@ namespace cutlass {
 namespace epilogue {
 namespace thread {
 
-namespace detail {
-
-/// Dummy class used to designate that the second binary operator in the epilogue is unsued
-template <typename T>
-class NoOp {};
-
-}
-
 /// Models a residual block of the form: UnaryOp(BinaryOp(BinaryOp(ActivationOp(TensorOp(X) + bias), residual1), residual2))
 template <typename ElementOutput_, typename ElementAccumulator_,
           typename ElementCompute_, typename ElementC_, int ElementsPerAccess,
           template <typename T> class ActivationOp_,
           template <typename T> class BinaryOp1_,
           template <typename T> class UnaryOp_,
-          template <typename T> class BinaryOp2_ = detail::NoOp>
+          template <typename T> class BinaryOp2_ = detail::NoOp,
+          bool StoreT_ = false,
+          typename ElementVector_ = ElementC_>
 class LinearCombinationResidualBlock {
 public:
   static bool const kIsSingleSource = false;
@@ -68,6 +63,7 @@ public:
   using ElementC = ElementC_;
   using ElementAccumulator = ElementAccumulator_;
   using ElementCompute = ElementCompute_;
+  using ElementVector = ElementVector_;
   static int const kElementsPerAccess = ElementsPerAccess;
   static int const kCount = kElementsPerAccess;
 
@@ -88,7 +84,7 @@ public:
 
   static bool const kIsHeavy = true;
   static bool const kStoreZ = true;
-  static bool const kStoreT = false;
+  static bool const kStoreT = StoreT_;
 
   /// Host-constructable parameters structure
   struct Params {
@@ -179,11 +175,13 @@ template <typename ElementOutput_, typename ElementAccumulator_,
           typename ElementCompute_, typename ElementC_, int ElementsPerAccess,
           template <typename T> class ActivationOp_,
           template <typename T> class BinaryOp1_,
-          template <typename T> class UnaryOp_>
+          template <typename T> class UnaryOp_,
+          bool StoreT_,
+          typename ElementVector_>
 class LinearCombinationResidualBlock<ElementOutput_, ElementAccumulator_,
           ElementCompute_, ElementC_, ElementsPerAccess,
           ActivationOp_, BinaryOp1_, UnaryOp_,
-          detail::NoOp> {
+          detail::NoOp, StoreT_, ElementVector_> {
 public:
   static bool const kIsSingleSource = true;
 
@@ -191,6 +189,7 @@ public:
   using ElementC = ElementC_;
   using ElementAccumulator = ElementAccumulator_;
   using ElementCompute = ElementCompute_;
+  using ElementVector = ElementVector_;
   static int const kElementsPerAccess = ElementsPerAccess;
   static int const kCount = kElementsPerAccess;
 
@@ -210,7 +209,7 @@ public:
 
   static bool const kIsHeavy = true;
   static bool const kStoreZ = true;
-  static bool const kStoreT = false;
+  static bool const kStoreT = StoreT_;
 
   /// Host-constructable parameters structure
   struct Params {

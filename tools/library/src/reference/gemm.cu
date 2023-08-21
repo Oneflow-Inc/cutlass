@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -137,6 +137,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int8_t,
     float,
     int32_t,
+    int8_t,
     NumericConverterClamp<int8_t, float>
   >(manifest);
 
@@ -145,6 +146,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int8_t,
     int32_t,
     float,
+    int32_t,
     int32_t,
     NumericConverterClamp<int32_t, float>
   >(manifest);
@@ -163,6 +165,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int8_t,
     float,
     int32_t,
+    int8_t,
     NumericConverterClamp<int8_t, float>
   >(manifest);
 
@@ -172,7 +175,18 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int32_t,
     float,
     int32_t,
+    int32_t,
     NumericConverterClamp<int32_t, float>
+  >(manifest);
+
+  make_gemm_real_canonical_layouts<
+    int8_t,
+    int8_t,
+    int8_t,   
+    int32_t,
+    int32_t,
+    int8_t,
+    NumericConverterClamp<int8_t, int32_t>
   >(manifest);
 
   make_gemm_interleaved_layouts<
@@ -191,6 +205,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int32_t,
     float,
     int32_t,
+    int32_t,
     NumericConverterClamp<int32_t, float>
   >(manifest);
 
@@ -201,6 +216,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int8_t,
     float,
     int32_t,
+    int8_t,
     NumericConverterClamp<int8_t, float>
   >(manifest);
 
@@ -220,6 +236,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int32_t,
     float,
     int32_t,
+    int32_t,
     NumericConverterClamp<int32_t, float>
   >(manifest);
 
@@ -230,6 +247,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     uint8_t,
     float,
     int32_t,
+    uint8_t,
     NumericConverterClamp<uint8_t, float>
   >(manifest);
 
@@ -240,6 +258,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int8_t,
     float,
     int32_t,
+    int8_t,
     NumericConverterClamp<int8_t, float>
   >(manifest);
 
@@ -259,6 +278,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int32_t,
     float,
     int32_t,
+    int32_t,
     NumericConverterClamp<int32_t, float>
   >(manifest);
 
@@ -269,6 +289,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int4b_t,
     float,
     int32_t,
+    int4b_t,
     NumericConverterClamp<int4b_t, float>
   >(manifest);
 
@@ -288,6 +309,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int32_t,
     float,
     int32_t,
+    int32_t,
     NumericConverterClamp<int32_t, float>
   >(manifest);
 
@@ -298,6 +320,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     uint4b_t,
     float,
     int32_t,
+    uint4b_t,
     NumericConverterClamp<uint4b_t, float>
   >(manifest);
 
@@ -308,6 +331,7 @@ void initialize_gemm_reference_operations(Manifest &manifest) {
     int4b_t,
     float,
     int32_t,
+    int4b_t,
     NumericConverterClamp<int4b_t, float>
   >(manifest);
 
