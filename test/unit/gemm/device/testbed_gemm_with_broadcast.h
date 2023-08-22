@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -100,10 +100,13 @@ template <
 >
 struct TestbedGemmWithBroadcast {
 
+  using ElementA = typename Gemm::ElementA;
+  using ElementB = typename Gemm::ElementB;
   using OutputOp = typename Gemm::GemmKernel::Epilogue::OutputOp;
   using ElementC = typename Gemm::ElementC;
   using ElementAccumulator = typename Gemm::ElementAccumulator;
-  using ElementCOmpute = typename OutputOp::ElementCompute;
+  using ElementCompute = typename OutputOp::ElementCompute;
+  using ElementVector = typename OutputOp::ElementVector;
   using ElementZ = typename OutputOp::ElementZ;
   using ElementT = typename OutputOp::ElementT;
 
@@ -116,7 +119,7 @@ struct TestbedGemmWithBroadcast {
   cutlass::HostTensor<typename Gemm::ElementA, typename Gemm::LayoutA> tensor_A;          // Input A
   cutlass::HostTensor<typename Gemm::ElementB, typename Gemm::LayoutB> tensor_B;          // Input B
   cutlass::HostTensor<ElementC, typename Gemm::LayoutC> tensor_C;                         // Input C
-  cutlass::HostTensor<ElementC, typename Gemm::LayoutC> tensor_Broadcast;                 // Input Broadcast
+  cutlass::HostTensor<ElementVector, typename Gemm::LayoutC> tensor_Broadcast;            // Input Broadcast
 
   cutlass::HostTensor<ElementZ, typename Gemm::LayoutC> tensor_Z;
   cutlass::HostTensor<ElementT, typename Gemm::LayoutC> tensor_T;

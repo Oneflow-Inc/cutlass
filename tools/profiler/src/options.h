@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -196,6 +196,9 @@ public:
     /// If true, profiling is actually conducted.
     bool enabled;
 
+    /// If true, profiling returns an error code if no kernels are found to match the filters.
+    bool error_on_no_match = false;
+
     /// List of providers of each functionality to be profiled
     ProviderVector providers;
 
@@ -231,7 +234,7 @@ public:
     std::vector<std::pair<std::string, std::string>> pivot_tags;
 
     /// If true, reports status of all kernels including those that were
-    /// not run for the given argumetns
+    /// not run for the given arguments
     bool report_not_run;
 
     /// Prints human-readable text to stdout. If false, nothing is written to stdout

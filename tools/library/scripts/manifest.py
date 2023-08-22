@@ -14,10 +14,13 @@ from rank_k_operation import *
 from rank_2k_operation import *
 from trmm_operation import *
 from symm_operation import *
-from conv2d_operation import *  
-from conv3d_operation import *  
+from conv2d_operation import *
+from conv3d_operation import *
+import logging
 
 ###################################################################################################
+_LOGGER = logging.getLogger(__name__)
+
 
 class EmitOperationKindLibrary:
   def __init__(self, generated_path, kind, args):
@@ -26,8 +29,8 @@ class EmitOperationKindLibrary:
     self.args = args
     self.emitters = {
       OperationKind.Gemm: EmitGemmConfigurationLibrary
-      , OperationKind.Conv2d: EmitConv2dConfigurationLibrary  
-      , OperationKind.Conv3d: EmitConv3dConfigurationLibrary  
+      , OperationKind.Conv2d: EmitConv2dConfigurationLibrary
+      , OperationKind.Conv3d: EmitConv3dConfigurationLibrary
       , OperationKind.RankK: EmitRankKConfigurationLibrary
       , OperationKind.Rank2K: EmitRank2KConfigurationLibrary
       , OperationKind.Trmm: EmitTrmmConfigurationLibrary
@@ -92,7 +95,7 @@ void initialize_all_${operation_name}_operations(Manifest &manifest) {
     with self.emitters[self.kind](self.operation_path, configuration_name) as configuration_emitter:
       for operation in operations:
         configuration_emitter.emit(operation)
-      
+
       self.source_files.append(configuration_emitter.configuration_path)
 
     self.configurations.append(configuration_name)
@@ -162,7 +165,7 @@ ${fn_calls}
     self.fn_calls.append(SubstituteTemplate(
        "\t\t\tinitialize_all_${operation_kind}_operations(manifest);",
        {'operation_kind': operation_name}))
-    
+
 
 
   #
@@ -190,7 +193,7 @@ class Manifest:
     self.args = args
     self.operation_count = 0
     self.operations_by_name = {}
-    
+
     self.kernel_filter = ''
     self.kernel_filter_list = []
     self.kernel_names = []
@@ -204,43 +207,53 @@ class Manifest:
     if self.args:
       self.kernel_filter = self.args.kernels
       self.curr_build_dir = args.curr_build_dir
+
       architectures = args.architectures.split(';') if len(args.architectures) else ['50',]
+      architectures = [x if x != '90a' else '90' for x in architectures]
+
       self.compute_capabilities = [int(x) for x in architectures]
-      
+
       if args.filter_by_cc in ['false', 'False', '0']:
         self.filter_by_cc = False
 
-      if args.operations == 'all':
-        self.operations_enabled = []
-      else:
-        operations_list = [
-          OperationKind.Gemm
-          , OperationKind.Conv2d    
-          , OperationKind.Conv3d    
+    if args.operations == 'all':
+      self.operations_enabled = []
+    else:
+      operations_list = [
+        OperationKind.Gemm
+        , OperationKind.Conv2d
+        , OperationKind.Conv3d
           , OperationKind.RankK
           , OperationKind.Trmm
           , OperationKind.Symm
-        ] 
-        self.operations_enabled = [x for x in operations_list if OperationKindNames[x] in args.operations.split(',')]
+      ]
+      self.operations_enabled = [x for x in operations_list if OperationKindNames[x] in args.operations.split(',')]
 
-      if args.kernels == 'all':
-        self.kernel_names = []
-      else:
-        self.kernel_names = [x for x in args.kernels.split(',') if x != '']
+    if args.kernels == 'all':
+      self.kernel_names = []
+    else:
+      self.kernel_names = [x for x in args.kernels.split(',') if x != '']
 
-      self.ignore_kernel_names = [x for x in args.ignore_kernels.split(',') if x != '']
+    self.ignore_kernel_names = [x for x in args.ignore_kernels.split(',') if x != '']
 
-      if args.kernel_filter_file is None:
-          self.kernel_filter_list = []
-      else:
-          self.kernel_filter_list = self.get_kernel_filters(args.kernel_filter_file)
+    if args.kernel_filter_file is None:
+        self.kernel_filter_list = []
+    else:
+        self.kernel_filter_list = self.get_kernel_filters(args.kernel_filter_file)
+        _LOGGER.info("Using {filter_count} kernel filters from {filter_file}".format(
+            filter_count = len(self.kernel_filter_list), 
+            filter_file = args.kernel_filter_file))
 
-  #
+    self.operation_count = 0
+    self.operations_by_name = {}
+    self.disable_full_archs_compilation = args.disable_full_archs_compilation
+
+
   def get_kernel_filters (self, kernelListFile):
     if os.path.isfile(kernelListFile):
         with open(kernelListFile, 'r') as fileReader:
             lines = [line.rstrip() for line in fileReader if not line.startswith("#")]
-        
+
         lines = [re.compile(line) for line in lines if line]
         return lines
     else:
@@ -252,10 +265,10 @@ class Manifest:
     for kernel_filter_re in kernel_filter_list:
         if kernel_filter_re.search(kernel_name) is not None:
             return True
-        
+
     return False
 
-    
+
   #
   def _filter_string_matches(self, filter_string, haystack):
     ''' Returns true if all substrings appear in the haystack in order'''
@@ -300,19 +313,29 @@ class Manifest:
       # compare against the include list
       for name_substr in self.kernel_names:
         if self._filter_string_matches(name_substr, name):
+          _LOGGER.debug("Kernel {kernel} included due to filter string '{filt}'.".format(
+            kernel = operation.procedural_name(),
+            filt = name_substr))
           enabled = True
           break
 
       # compare against the exclude list
       for name_substr in self.ignore_kernel_names:
         if self._filter_string_matches(name_substr, name):
+          _LOGGER.debug("Kernel {kernel} ignored due to filter string '{filt}'.".format(
+            kernel = operation.procedural_name(),
+            filt = name_substr))
           enabled = False
           break
-          
+
     if len(self.kernel_filter_list) > 0:
-        enabled = False
         if self.filter_out_kernels(operation.procedural_name(), self.kernel_filter_list):
-            enabled = True
+          _LOGGER.debug("Kernel {kernel} matched via kernel filter file.".format(kernel = operation.procedural_name()))
+          enabled = True
+        else:
+          _LOGGER.debug("Kernel {kernel} culled due to no match in kernel filter file.".format(kernel = operation.procedural_name()))
+          enabled = False
+
 
     # todo: filter based on compute data type
     return enabled
@@ -320,14 +343,14 @@ class Manifest:
 
   #
   def append(self, operation):
-    ''' 
+    '''
       Inserts the operation.
 
       operation_kind -> configuration_name -> []
     '''
 
     if self.filter(operation):
-    
+
       self.selected_kernels.append(operation.procedural_name())
 
       self.operations_by_name[operation.procedural_name()] = operation
@@ -343,16 +366,18 @@ class Manifest:
 
       self.operations[operation.operation_kind][configuration_name].append(operation)
       self.operation_count += 1
+    else:
+      _LOGGER.debug("Culled {} from manifest".format(operation.procedural_name()))
   #
 
   #
   def emit(self, target = GeneratorTarget.Library):
 
     operation_emitters = {
-      GeneratorTarget.Library: EmitOperationKindLibrary 
+      GeneratorTarget.Library: EmitOperationKindLibrary
     }
     interface_emitters = {
-      GeneratorTarget.Library: EmitInterfaceLibrary 
+      GeneratorTarget.Library: EmitInterfaceLibrary
     }
 
     generated_path = os.path.join(self.curr_build_dir, 'generated')
@@ -376,6 +401,8 @@ class Manifest:
     for operation_kind, configurations in self.operations.items():
       with operation_emitters[target](generated_path, operation_kind, self.args) as operation_kind_emitter:
         for configuration_name, operations in configurations.items():
+          _LOGGER.info("Emitting {config} with {num_ops} operations.".format(
+              config = configuration_name, num_ops = len(operations)))
           operation_kind_emitter.emit(configuration_name, operations)
 
         source_files += operation_kind_emitter.source_files
@@ -392,11 +419,58 @@ class Manifest:
   PRIVATE
 """, { 'target_name': target_name})
 
-      manifest_file.write(target_text)
+      manifest_file.write(target_text + '\n\n')
 
       for source_file in source_files:
         manifest_file.write("    %s\n" % str(source_file.replace('\\', '/')))
-      manifest_file.write(")")
+      manifest_file.write(")\n")
+
+      if self.disable_full_archs_compilation:
+
+        def for_hopper(name):
+            pass
+
+        def for_ampere(name):
+            return "16816" in name or \
+                   "16832" in name or \
+                   "16864" in name or \
+                   ("1688" in name and "tf32" in name)
+
+        def for_turing(name):
+            return ("1688" in name and "tf32" not in name) or \
+                    "8816" in name
+
+        def for_volta(name):
+            return "884" in name
+
+        def is_cpp(name):
+            return name.endswith(".cpp")
+
+        def get_src_archs_str_given_requested_cuda_archs(archs, source_file):
+            intersected_archs = archs & set(self.compute_capabilities)
+            if intersected_archs == set():
+                raise RuntimeError(
+                      """
+                      Empty archs set for file {} after taking
+                      the intersection of {} (global requested archs) and
+                      {} (per file requested archs)
+                      """.format(source_file, set(self.compute_capabilities), archs))
+            else:
+                return " ".join(map(str, intersected_archs))
+
+        for source_file in source_files:
+            if is_cpp(source_file):
+                continue # skip because source is cpp
+            elif for_ampere(source_file):
+                archs_str = get_src_archs_str_given_requested_cuda_archs({80, 87, 90}, source_file)
+            elif for_turing(source_file):
+                archs_str = get_src_archs_str_given_requested_cuda_archs({75}, source_file)
+            elif for_volta(source_file):
+                archs_str = get_src_archs_str_given_requested_cuda_archs({70, 72}, source_file)
+            else:
+                raise RuntimeError("Per file archs are not set {}, as there is no rule specified for this file pattern".format(source_file))
+
+            manifest_file.write("cutlass_apply_cuda_gencode_flags({} SM_ARCHS {})\n".format(str(source_file.replace('\\', '/')), archs_str))
   #
 
 ###################################################################################################

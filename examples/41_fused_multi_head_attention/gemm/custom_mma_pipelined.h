@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights
  *reserved. SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -310,7 +310,7 @@ class CustomMmaPipelined : public CustomMmaBase<Shape_, Policy_, 2> {
     iterator_B.clear_mask(gemm_k_iterations <= 1);
 
     // Issue loads during the first warp-level matrix multiply-add *AFTER*
-    // issuing shared memory loads (which have the tighest latency requirement).
+    // issuing shared memory loads (which have the tightest latency requirement).
 
     //
     // Mainloop

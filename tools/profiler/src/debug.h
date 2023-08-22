@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@
 //#define report(x) { std::cout << "\033[31m" << __FILE__ << ":" << __LINE__ << "  " << x << "\033[0m" << std::endl; }
 //#define report(x) {}
 
-// Enable/Disble Profiler debug prints
+// Enable/Disable Profiler debug prints
 //#define DEBUG_PROFILER 
 
 //RED    31m   // profiler prints debug messages in red

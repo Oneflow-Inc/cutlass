@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -176,10 +176,10 @@ public:
   /// Gets the number of adjacent tensors in memory
   int batch_count() const;
 
-  /// Gets the stride (in units of elements) beteween items
+  /// Gets the stride (in units of elements) between items
   int64_t batch_stride() const;
 
-  /// Gets the stride (in units of bytes) beteween items
+  /// Gets the stride (in units of bytes) between items
   int64_t batch_stride_bytes() const;
 
   /// Capacity of allocation in number of elements

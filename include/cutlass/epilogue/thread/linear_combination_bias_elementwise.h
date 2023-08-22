@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@
 #include "cutlass/numeric_conversion.h"
 
 #include "cutlass/epilogue/thread/activation.h"
+#include "cutlass/epilogue/thread/scale_type.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -61,7 +62,9 @@ template <
   typename ElementT_,
   int ElementsPerAccess,
   typename ElementwiseOp_ = Identity<ElementCompute_>,
-  typename BinaryOp_ = plus<ElementCompute_>
+  typename BinaryOp_ = plus<ElementCompute_>,
+  bool StoreT_ = true,
+  typename ElementVector_ = ElementC_
 >
 class LinearCombinationBiasElementwise {
 public:
@@ -72,6 +75,7 @@ public:
   using ElementCompute = ElementCompute_;
   using ElementZ = ElementZ_;
   using ElementT = ElementT_;
+  using ElementVector = ElementVector_;
   static int const kElementsPerAccess = ElementsPerAccess;
   static int const kCount = kElementsPerAccess;
 
@@ -83,11 +87,17 @@ public:
 
   using FragmentAccumulator = Array<ElementAccumulator, kElementsPerAccess>;
   using FragmentCompute = Array<ElementCompute, kElementsPerAccess>;
-  using FragmentC = Array<ElementOutput, kElementsPerAccess>;
+  using FragmentC = Array<ElementC, kElementsPerAccess>;
   using FragmentZ = Array<ElementZ, kElementsPerAccess>;
   using FragmentT = Array<ElementT, kElementsPerAccess>;
 
+  // Definitions needed for collective epilogue
+  using FragmentSource = FragmentC;
   using FragmentOutput = FragmentZ;
+  using ElementBias = ElementVector;
+  using FragmentBias = FragmentCompute;
+  using ActivationFunctor = ElementwiseOp;
+  static const ScaleType::Kind kScale = ScaleType::Default;
 
   static bool const kIsHeavy = ElementwiseOp::kIsHeavy;
 
@@ -95,7 +105,7 @@ public:
   static bool const kStoreZ = true;
 
   /// If true, the 'T' tensor is stored
-  static bool const kStoreT = true;
+  static bool const kStoreT = StoreT_;
 
   /// Host-constructable parameters structure
   struct Params {
@@ -193,8 +203,8 @@ public:
   /// Applies the operation when is_source_needed() is true
   CUTLASS_HOST_DEVICE
   void operator()(
-    FragmentZ &frag_Z, 
-    FragmentT &frag_T, 
+    FragmentZ &frag_Z,
+    FragmentT &frag_T,
     FragmentAccumulator const &AB,
     FragmentC const &frag_C,
     FragmentCompute const &V) const {
@@ -224,8 +234,8 @@ public:
   /// Applies the operation when is_source_needed() is false
   CUTLASS_HOST_DEVICE
   void operator()(
-    FragmentZ &frag_Z, 
-    FragmentT &frag_T, 
+    FragmentZ &frag_Z,
+    FragmentT &frag_T,
     FragmentAccumulator const &AB,
     FragmentCompute const &V) const {
 

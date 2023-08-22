@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -442,12 +442,12 @@ int DeviceAllocation::batch_count() const {
   return batch_count_;
 }
 
-/// Gets the stride (in units of elements) beteween items
+/// Gets the stride (in units of elements) between items
 int64_t DeviceAllocation::batch_stride() const {
   return batch_stride_;
 }
 
-/// Gets the stride (in units of bytes) beteween items
+/// Gets the stride (in units of bytes) between items
 int64_t DeviceAllocation::batch_stride_bytes() const {
   return bytes(type_, batch_stride_);
 }
@@ -462,6 +462,13 @@ size_t DeviceAllocation::bytes() const {
 
 /// Copies from an equivalent-sized tensor in device memory
 void DeviceAllocation::copy_from_device(void const *ptr) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping copy of size 0 allocation\n";
+#endif
+    return;
+  }
+
   cudaError_t result = cudaMemcpy(data(), ptr, bytes(), cudaMemcpyDeviceToDevice);
   if (result != cudaSuccess) {
     throw std::runtime_error("Failed device-to-device copy");
@@ -470,22 +477,43 @@ void DeviceAllocation::copy_from_device(void const *ptr) {
 
 /// Copies from an equivalent-sized tensor in device memory
 void DeviceAllocation::copy_from_host(void const *ptr) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping copy of size 0 allocation\n";
+#endif
+    return;
+  }
+
   cudaError_t result = cudaMemcpy(data(), ptr, bytes(), cudaMemcpyHostToDevice);
   if (result != cudaSuccess) {
-    throw std::runtime_error("Failed device-to-device copy");
+    throw std::runtime_error("Failed host-to-device copy");
   }
 }
 
 /// Copies from an equivalent-sized tensor in device memory
 void DeviceAllocation::copy_to_host(void *ptr) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping copy of size 0 allocation\n";
+#endif
+    return;
+  }
+
   cudaError_t result = cudaMemcpy(ptr, data(), bytes(), cudaMemcpyDeviceToHost);
   if (result != cudaSuccess) {
-    throw std::runtime_error("Failed device-to-device copy");
+    throw std::runtime_error("Failed device-to-host copy");
   }
 }
 
 void DeviceAllocation::initialize_random_device(int seed, Distribution dist) {
-  if (!good()) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping initialization of size 0 allocation\n";
+#endif
+    return;
+  }
+
+  if (!data()) {
     throw std::runtime_error("Attempting to initialize invalid allocation.");
   }
 
@@ -544,6 +572,22 @@ void DeviceAllocation::initialize_random_device(int seed, Distribution dist) {
   case library::NumericTypeID::kCF32:
     cutlass::reference::device::BlockFillRandom<cutlass::complex<float>>(
       reinterpret_cast<cutlass::complex<float> *>(pointer_),
+      capacity_,
+      seed,
+      dist
+    );
+    break;
+  case library::NumericTypeID::kFE4M3:
+    cutlass::reference::device::BlockFillRandom<cutlass::float_e4m3_t>(
+      reinterpret_cast<cutlass::float_e4m3_t *>(pointer_),
+      capacity_,
+      seed,
+      dist
+    );
+    break;
+  case library::NumericTypeID::kFE5M2:
+    cutlass::reference::device::BlockFillRandom<cutlass::float_e5m2_t>(
+      reinterpret_cast<cutlass::float_e5m2_t *>(pointer_),
       capacity_,
       seed,
       dist
@@ -674,13 +718,36 @@ void DeviceAllocation::initialize_random_device(int seed, Distribution dist) {
 }
 
 void DeviceAllocation::initialize_random_host(int seed, Distribution dist) {
-  if (!good()) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping initialization of size 0 allocation\n";
+#endif
+    return;
+  }
+
+  if (!data()) {
     throw std::runtime_error("Attempting to initialize invalid allocation.");
   }
 
   std::vector<uint8_t> host_data(bytes());
 
   switch (type_) {
+  case library::NumericTypeID::kFE4M3:
+    cutlass::reference::host::BlockFillRandom<cutlass::float_e4m3_t>(
+      reinterpret_cast<cutlass::float_e4m3_t *>(host_data.data()),
+      capacity_,
+      seed,
+      dist
+    );
+    break;
+  case library::NumericTypeID::kFE5M2:
+    cutlass::reference::host::BlockFillRandom<cutlass::float_e5m2_t>(
+      reinterpret_cast<cutlass::float_e5m2_t *>(host_data.data()),
+      capacity_,
+      seed,
+      dist
+    );
+    break;
   case library::NumericTypeID::kF16:
     cutlass::reference::host::BlockFillRandom<cutlass::half_t>(
       reinterpret_cast<cutlass::half_t *>(host_data.data()),
@@ -872,7 +939,14 @@ void DeviceAllocation::initialize_random_host(int seed, Distribution dist) {
 }
 
 void DeviceAllocation::initialize_random_sparsemeta_device(int seed, int MetaSizeInBits) {
-  if (!good()) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping initialization of size 0 allocation\n";
+#endif
+    return;
+  }
+
+  if (!data()) {
     throw std::runtime_error("Attempting to initialize invalid allocation.");
   }
 
@@ -902,7 +976,14 @@ void DeviceAllocation::initialize_random_sparsemeta_device(int seed, int MetaSiz
 }
 
 void DeviceAllocation::initialize_random_sparsemeta_host(int seed, int MetaSizeInBits) {
-  if (!good()) {
+  if (!bytes()) {
+#ifndef NDEBUG
+    std::cout << "Skipping initialization of size 0 allocation\n";
+#endif
+    return;
+  }
+
+  if (!data()) {
     throw std::runtime_error("Attempting to initialize invalid allocation.");
   }
 
@@ -942,6 +1023,18 @@ bool DeviceAllocation::block_compare_equal(
   size_t capacity) {
 
   switch (numeric_type) {
+  case library::NumericTypeID::kFE4M3:
+    return reference::device::BlockCompareEqual<float_e4m3_t>(
+      reinterpret_cast<float_e4m3_t const *>(ptr_A), 
+      reinterpret_cast<float_e4m3_t const *>(ptr_B), 
+      capacity);
+    
+  case library::NumericTypeID::kFE5M2:
+    return reference::device::BlockCompareEqual<float_e5m2_t>(
+      reinterpret_cast<float_e5m2_t const *>(ptr_A),
+      reinterpret_cast<float_e5m2_t const *>(ptr_B), 
+      capacity);
+
   case library::NumericTypeID::kF16:
     return reference::device::BlockCompareEqual<half_t>(
       reinterpret_cast<half_t const *>(ptr_A), 
@@ -1095,6 +1188,22 @@ bool DeviceAllocation::block_compare_relatively_equal(
   double nonzero_floor) {
 
   switch (numeric_type) {
+  case library::NumericTypeID::kFE4M3:
+    return reference::device::BlockCompareRelativelyEqual<float_e4m3_t>(
+      reinterpret_cast<float_e4m3_t const *>(ptr_A), 
+      reinterpret_cast<float_e4m3_t const *>(ptr_B),
+      capacity, 
+      static_cast<float_e4m3_t>(epsilon), 
+      static_cast<float_e4m3_t>(nonzero_floor));
+    
+  case library::NumericTypeID::kFE5M2:
+    return reference::device::BlockCompareRelativelyEqual<float_e5m2_t>(
+      reinterpret_cast<float_e5m2_t const *>(ptr_A), 
+      reinterpret_cast<float_e5m2_t const *>(ptr_B),
+      capacity, 
+      static_cast<float_e5m2_t>(epsilon), 
+      static_cast<float_e5m2_t>(nonzero_floor));
+
   case library::NumericTypeID::kF16:
     return reference::device::BlockCompareRelativelyEqual<half_t>(
       reinterpret_cast<half_t const *>(ptr_A), 
@@ -1430,6 +1539,14 @@ void DeviceAllocation::write_tensor_csv(
   std::ostream &out) {
 
   switch (this->type()) {
+  case library::NumericTypeID::kFE4M3:
+    write_tensor_csv_static_type<float_e4m3_t>(out, *this);
+    break;
+  
+  case library::NumericTypeID::kFE5M2:
+    write_tensor_csv_static_type<float_e5m2_t>(out, *this);
+    break;
+
   case library::NumericTypeID::kF16:
     write_tensor_csv_static_type<half_t>(out, *this);
     break;
@@ -1586,6 +1703,14 @@ static void tensor_fill(DeviceAllocation &allocation, Element val = Element()) {
 void DeviceAllocation::fill(double val = 0.0) {
 
   switch (this->type()) {
+  case library::NumericTypeID::kFE4M3:
+    tensor_fill<float_e4m3_t>(*this, static_cast<float_e4m3_t>(val));
+    break;
+
+  case library::NumericTypeID::kFE5M2:
+    tensor_fill<float_e5m2_t>(*this, static_cast<float_e5m2_t>(val));
+    break;
+
   case library::NumericTypeID::kF16:
     tensor_fill<half_t>(*this, static_cast<half_t>(val));
     break;

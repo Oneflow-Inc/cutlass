@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -66,7 +66,10 @@ void OperationTable::append(Manifest const &manifest) {
         gemm_desc.B.element,
         gemm_desc.B.layout,
         gemm_desc.transform_B,
-        gemm_desc.C.element
+        gemm_desc.C.element,
+        gemm_desc.C.layout,
+        gemm_desc.D.element,
+        gemm_desc.D.layout
       );
 
       Operation const *op = operation.get();

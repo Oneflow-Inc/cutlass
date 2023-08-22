@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -304,8 +304,7 @@ public:
       ptr_D_imag(args.ptr_D_imag)
     {}
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     void update(Arguments const &args)
     {
       ptr_M = args.ptr_M;
@@ -467,7 +466,7 @@ public:
 
         // Broadcast the warp_id computed by lane 0 to ensure dependent code
         // is compiled as warp-uniform.
-        int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+        int warp_idx = canonical_warp_idx();
         int lane_idx = threadIdx.x % 32;
     
         //

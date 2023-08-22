@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -189,7 +189,7 @@ Options::Initialization::Initialization(cutlass::CommandLine const &cmdline) {
       enabled = false;
     }
     else if (provider != library::Provider::kReferenceHost && provider != library::Provider::kReferenceDevice) {
-      throw std::runtime_error("Unsupported intialization provider specified."); 
+      throw std::runtime_error("Unsupported initialization provider specified.");
     }
   }
   else {
@@ -205,7 +205,7 @@ Options::Initialization::Initialization(cutlass::CommandLine const &cmdline) {
     get_distribution(cmdline, "dist", data_distribution);
   }
   else {
-    // profiler choosen data distribution (allowed to change based on numeric types)
+    // profiler chosen data distribution (allowed to change based on numeric types)
     fix_data_distribution = false;
     // set uniform data distribution with range [-4, 4] 
     data_distribution.set_uniform(-4, 4, 0);
@@ -706,16 +706,19 @@ Options::Options(cutlass::CommandLine const &cmdline):
   }
   else if (cmdline.check_cmd_line_flag("kernels")) {
     cmdline.get_cmd_line_arguments("kernels", operation_names);
+    profiling.error_on_no_match = cmdline.check_cmd_line_flag("error-on-no-match");
   }
 
   if (cmdline.check_cmd_line_flag("ignore-kernels")) {
     cmdline.get_cmd_line_arguments("ignore-kernels", excluded_operation_names);
+    profiling.error_on_no_match = cmdline.check_cmd_line_flag("error-on-no-match");
   }
 
   // Prevent launches on the device for anything other than CUTLASS operation
+  // Allow verification only on host
   if (execution_mode == ExecutionMode::kTrace) {
     initialization.provider = library::Provider::kReferenceHost;
-    verification.enabled = false;
+    verification.providers = {library::Provider::kReferenceHost};
     profiling.enabled = false;
   }
 }

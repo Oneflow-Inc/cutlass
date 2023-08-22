@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,16 +61,17 @@ GemmOperationProfiler::GemmOperationProfiler(Options const &options):
     options,
     library::OperationKind::kGemm,
     {
-      {ArgumentTypeID::kEnumerated, {"gemm_kind"}, "Variant of GEMM (gemm, batched, array, universal, planar_complex, planar_complex_array)"},
-      {ArgumentTypeID::kEnumerated, {"split_k_mode"}, "Variant of split K mode(serial, parallel)"},
+      {ArgumentTypeID::kEnumerated, {"gemm_kind"}, "Variant of GEMM (universal, gemm, planar_complex, planar_complex_array)"},
       {ArgumentTypeID::kInteger, {"m", "problem-size::m"}, "M dimension of the GEMM problem space"},
       {ArgumentTypeID::kInteger, {"n", "problem-size::n"}, "N dimension of the GEMM problem space"},
       {ArgumentTypeID::kInteger, {"k", "problem-size::k"}, "K dimension of the GEMM problem space"},
       {ArgumentTypeID::kTensor, {"A"}, "Tensor storing the A operand"},
       {ArgumentTypeID::kTensor, {"B"}, "Tensor storing the B operand"},
       {ArgumentTypeID::kTensor, {"C"}, "Tensor storing the C operand"},
+      {ArgumentTypeID::kTensor, {"D"}, "Tensor storing the D output"},
       {ArgumentTypeID::kScalar, {"alpha", "epilogue::alpha"}, "Epilogue scalar alpha"},
       {ArgumentTypeID::kScalar, {"beta", "epilogue::beta"}, "Epilogue scalar beta"},
+      {ArgumentTypeID::kEnumerated, {"split_k_mode", "split-k-mode"}, "Variant of split K mode(serial, parallel)"},
       {ArgumentTypeID::kInteger, {"split_k_slices", "split-k-slices"}, "Number of partitions of K dimension"},
       {ArgumentTypeID::kInteger, {"batch_count", "batch-count"}, "Number of GEMMs computed in one batch"},
     },
@@ -108,7 +109,7 @@ void GemmOperationProfiler::print_examples(std::ostream &out) const {
     << "Run when A is f16 with column-major and B is any datatype with row-major (For column major, use column, col, or n. For row major use, row or t):\n"
     << "  $ cutlass_profiler --operation=Gemm --A=f16:column --B=*:row\n\n"
 
-    << "Profile a particular problem size with split K and paralell reduction:\n"
+    << "Profile a particular problem size with split K and parallel reduction:\n"
     << "  $ cutlass_profiler --operation=Gemm --split_k_mode=parallel --split_k_slices=2 --m=1024 --n=1024 --k=128\n\n"
 
     << "Using various input value distribution:\n"
@@ -168,7 +169,7 @@ Status GemmOperationProfiler::GemmProblem::parse(
   }
 
   if (!arg_as_SplitKModeID(this->split_k_mode, "split_k_mode", problem_space, problem)) {
-    // defualt value
+    // default value
     this->split_k_mode = library::SplitKMode::kSerial;
   }
   
@@ -203,6 +204,10 @@ Status GemmOperationProfiler::GemmProblem::parse(
   }
 
   if (!tensor_description_satisfies(operation_desc.C, "C", problem_space, problem)) {
+    return Status::kErrorInvalidProblem;
+  }
+
+  if (!tensor_description_satisfies(operation_desc.D, "D", problem_space, problem)) {
     return Status::kErrorInvalidProblem;
   }
 
@@ -298,8 +303,6 @@ void GemmOperationProfiler::GemmProblem::initialize_result(
 
   set_argument(result, "gemm_kind", problem_space, library::to_string(operation_desc.gemm_kind));
 
-  set_argument(result, "split_k_mode", problem_space, library::to_string(split_k_mode));
-
   set_argument(result, "A", problem_space,
     std::string(library::to_string(operation_desc.A.element)) + ":" + library::to_string(operation_desc.A.layout));
 
@@ -309,10 +312,14 @@ void GemmOperationProfiler::GemmProblem::initialize_result(
   set_argument(result, "C", problem_space,
     std::string(library::to_string(operation_desc.C.element)) + ":" + library::to_string(operation_desc.C.layout));
 
+  set_argument(result, "D", problem_space,
+    std::string(library::to_string(operation_desc.D.element)) + ":" + library::to_string(operation_desc.D.layout));
+
   set_argument(result, "m", problem_space, m);
   set_argument(result, "n", problem_space, n);
   set_argument(result, "k", problem_space, k);
 
+  set_argument(result, "split_k_mode", problem_space, library::to_string(split_k_mode));
   set_argument(result, "split_k_slices", problem_space, split_k_slices);
   set_argument(result, "batch_count", problem_space, batch_count);
 
@@ -405,7 +412,7 @@ void GemmOperationProfiler::initialize_result_(
 
 }
 
-/// Initialize redution problem dimentions and library::Operation
+/// Initialize reduction problem dimensions and library::Operation
 bool GemmOperationProfiler::initialize_reduction_configuration_(
   library::Operation const *operation,
   ProblemSpace::Problem const &problem) {
@@ -433,8 +440,8 @@ bool GemmOperationProfiler::initialize_reduction_configuration_(
     library::Provider::kCUTLASS,
     gemm_desc.tile_description.math_instruction.element_accumulator,    // element workspace
     gemm_desc.tile_description.math_instruction.element_accumulator,    // element accumulator
-    gemm_desc.C.element,                                                // element output
-    gemm_desc.element_epilogue                                          // element coumpute
+    gemm_desc.D.element,                                                // element output
+    gemm_desc.element_epilogue                                          // element compute
   );
 
   auto reduction_it = library::Singleton::get().operation_table.reduction_operations.find(reduction_key);
@@ -486,7 +493,7 @@ Status GemmOperationProfiler::initialize_workspace(
   }
 
   if (options.execution_mode != ExecutionMode::kDryRun) {
-
+    int seed_shift = 0;
     gemm_workspace_.A = device_context.allocate_tensor(
       options,
       "A",
@@ -494,7 +501,8 @@ Status GemmOperationProfiler::initialize_workspace(
       operation_desc.A.layout,
       {int(problem_.m), int(problem_.k)},
       {int(problem_.lda)},
-      problem_.batch_count * gemm_workspace_.problem_count
+      problem_.batch_count * gemm_workspace_.problem_count,
+      seed_shift++
     );
 
     gemm_workspace_.B = device_context.allocate_tensor(
@@ -504,7 +512,8 @@ Status GemmOperationProfiler::initialize_workspace(
       operation_desc.B.layout,
       {int(problem_.k), int(problem_.n)},
       {int(problem_.ldb)},
-      problem_.batch_count * gemm_workspace_.problem_count
+      problem_.batch_count * gemm_workspace_.problem_count,
+      seed_shift++
     );
 
     gemm_workspace_.C = device_context.allocate_tensor(
@@ -514,13 +523,14 @@ Status GemmOperationProfiler::initialize_workspace(
       operation_desc.C.layout,
       {int(problem_.m), int(problem_.n)},
       {int(problem_.ldc)},
-      problem_.batch_count * gemm_workspace_.problem_count
+      problem_.batch_count * gemm_workspace_.problem_count,
+      seed_shift++
     );
 
     gemm_workspace_.Computed = device_context.allocate_tensor(
       "D",
-      operation_desc.C.element,
-      operation_desc.C.layout,
+      operation_desc.D.element,
+      operation_desc.D.layout,
       {int(problem_.m), int(problem_.n)},
       {int(problem_.ldc)},
       problem_.batch_count * gemm_workspace_.problem_count
@@ -528,19 +538,27 @@ Status GemmOperationProfiler::initialize_workspace(
 
     gemm_workspace_.Reference = device_context.allocate_tensor(
       "Reference",
-      operation_desc.C.element,
-      operation_desc.C.layout,
+      operation_desc.D.element,
+      operation_desc.D.layout,
       {int(problem_.m), int(problem_.n)},
       {int(problem_.ldc)},
       problem_.batch_count * gemm_workspace_.problem_count
     );
 
-    gemm_workspace_.Reference->copy_from_device(gemm_workspace_.C->data());
-
+    // NOTE: the leading non-batch strides are duplicated here for 3.0 API kernels
+    gemm_workspace_.arguments.problem_size = {int(problem_.m), int(problem_.n), int(problem_.k)};
+    gemm_workspace_.arguments.batch_count = problem_.batch_count;
+    gemm_workspace_.arguments.lda = problem_.lda;
+    gemm_workspace_.arguments.ldb = problem_.ldb;
+    gemm_workspace_.arguments.ldc = problem_.ldc;
+    gemm_workspace_.arguments.ldd = problem_.ldc;
     gemm_workspace_.arguments.batch_stride_A = gemm_workspace_.A->batch_stride();
     gemm_workspace_.arguments.batch_stride_B = gemm_workspace_.B->batch_stride();
     gemm_workspace_.arguments.batch_stride_C = gemm_workspace_.C->batch_stride();
     gemm_workspace_.arguments.batch_stride_D = gemm_workspace_.Computed->batch_stride();
+
+    /* Query device SM count to pass onto the kernel as an argument, where needed */
+    gemm_workspace_.arguments.sm_count = options.device.properties.multiProcessorCount;
   }
 
   //
@@ -959,9 +977,12 @@ bool GemmOperationProfiler::verify_with_reference_(
       problem_.beta.data(),
 
       gemm_desc.C.element,
+      gemm_desc.C.layout,
       ptr_C,
       int(gemm_workspace_.configuration.ldc),
 
+      gemm_desc.D.element,
+      gemm_desc.D.layout,
       ptr_D,
       int(gemm_workspace_.configuration.ldd),
 
@@ -969,8 +990,7 @@ bool GemmOperationProfiler::verify_with_reference_(
       gemm_workspace_.A->batch_stride(),
       gemm_workspace_.B->batch_stride(),
       gemm_workspace_.C->batch_stride(),
-      gemm_workspace_.Reference->batch_stride()
-    );
+      gemm_workspace_.Reference->batch_stride());
 
     if (status != Status::kSuccess) {
       results_.back().verification_map[provider] = Disposition::kNotRun;

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -741,7 +741,7 @@ private:
       LayoutO layout_O(ldo_host.at(i));
 
       MatrixCoord extent_Q{problem0.m(), problem0.k()};
-      MatrixCoord extent_K{problem0.n(), problem0.k()};
+      MatrixCoord extent_K{problem0.k(), problem0.n()};
       MatrixCoord extent_P{problem0.m(), problem0.n()};
       MatrixCoord extent_V{problem1.k(), problem1.n()};
       MatrixCoord extent_O{problem1.m(), problem1.n()};
@@ -789,7 +789,6 @@ private:
       int n_dim = options.use_mask ? options.problem_sizes0_real.at(i).n() : problem0.n();
 
       // Compute softmax for reference matrix
-      // Assumed a row-major storage
       for (int m = 0; m < problem0.m(); m++) {
         int n_dim_row = n_dim;
         if (options.causal) {
@@ -922,6 +921,7 @@ public:
       ldv.get(),
       ldo.get(),
       options.causal,
+      options.alpha0,
       options.problem_sizes1.data()
     );
 
@@ -1173,7 +1173,7 @@ int main(int argc, char const **args) {
 
   // Determine kernel configuration based on head size.
   // If head size is less than or equal to 64, each block operates over 64 queries and
-  // 64 keys, and parital results can be stored in the register file.
+  // 64 keys, and partial results can be stored in the register file.
   // If head size is greater than 64, each block operates over 32 queries and 128 keys,
   // and partial results are stored in shared memory.
   if (options.head_size_v > 64) {

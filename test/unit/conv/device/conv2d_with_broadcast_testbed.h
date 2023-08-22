@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -120,6 +120,7 @@ public:
   using EpilogueOutputOp = typename Conv2d::EpilogueOutputOp;
   using ElementZ = typename EpilogueOutputOp::ElementZ;
   using ElementT = typename EpilogueOutputOp::ElementT;
+  using ElementVector = typename EpilogueOutputOp::ElementVector;
 
   static cutlass::conv::Operator const kConvolutionalOperator = Conv2d::kConvolutionalOperator;
   static const bool kAddBroadcastFirst = AddBroadcastFirst;
@@ -142,7 +143,7 @@ public:
   cutlass::HostTensor<ElementT, LayoutC> tensor_T_computed;
   cutlass::HostTensor<ElementT, LayoutC> tensor_T_reference;
   cutlass::HostTensor<ElementAccumulator, LayoutC> tensor_Y_reference;
-  cutlass::HostTensor<ElementC, LayoutC> tensor_Broadcast;                 // Input Broadcast
+  cutlass::HostTensor<ElementVector, LayoutC> tensor_Broadcast;            // Input Broadcast
 
 public:
 
@@ -501,7 +502,7 @@ public:
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 // TestAllConv: Runs cutlass::conv::device::ImplicitGemmConvolution operator and compares it with reference
 // TestAllConv runs conv operator on default conv problem sizes from test::conv::device::TestbedConv2dProblemSizes
-// Additionaly, each conv2d test can provide conv problem sizes (conv_test_sizes) and blacklist of sizes 
+// Additionally, each conv2d test can provide conv problem sizes (conv_test_sizes) and blacklist of sizes 
 // (conv_blacklist_sizes)
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 template <typename ImplicitGemm,

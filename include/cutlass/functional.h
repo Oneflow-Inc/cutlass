@@ -1,5 +1,5 @@
   /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,6 +44,11 @@
 #include <mma.h>
 #endif // defined(CUTLASS_ARCH_WMMA_ENABLED)
 
+#ifdef _MSC_VER
+// Provides support for alternate operators such as 'and', 'or', ...
+#include <iso646.h>
+#endif // _MSC_VER
+
 namespace cutlass {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -54,6 +59,12 @@ struct absolute_value_op {
   T operator()(T lhs) const {
     return abs(lhs);
   }
+};
+
+template <>
+struct absolute_value_op<float> {
+  CUTLASS_HOST_DEVICE
+  float operator()(float lhs) const { return fabs(lhs); }
 };
 
 template <typename T>
@@ -80,6 +91,89 @@ struct multiplies {
   T operator()(T lhs, T const &rhs) const {
     lhs *= rhs;
     return lhs;
+  }
+};
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+/// Partial specializations needed when __CUDA_NO_HALF2_OPERATORS__ is set
+template<>
+struct plus<__half2> {
+  CUTLASS_HOST_DEVICE
+  __half2 operator()(__half2 lhs, __half2 const &rhs) const {
+    return __hadd2(lhs, rhs);
+  }
+};
+
+template<>
+struct minus<__half2> {
+  CUTLASS_HOST_DEVICE
+  __half2 operator()(__half2 lhs, __half2 const &rhs) const {
+    return __hsub2(lhs, rhs);
+  }
+};
+
+template<>
+struct multiplies<__half2> {
+  CUTLASS_HOST_DEVICE
+  __half2 operator()(__half2 lhs, __half2 const &rhs) const {
+    return __hmul2(lhs, rhs);
+  }
+};
+
+/// Partial specializations needed when __CUDA_NO_HALF_OPERATORS__ is set
+template<>
+struct plus<__half> {
+  CUTLASS_HOST_DEVICE
+  __half operator()(__half lhs, __half const &rhs) const {
+    return __hadd(lhs, rhs);
+  }
+};
+
+template<>
+struct minus<__half> {
+  CUTLASS_HOST_DEVICE
+  __half operator()(__half lhs, __half const &rhs) const {
+    return __hsub(lhs, rhs);
+  }
+};
+
+template<>
+struct multiplies<__half> {
+  CUTLASS_HOST_DEVICE
+  __half operator()(__half lhs, __half const &rhs) const {
+    return __hmul(lhs, rhs);
+  }
+};
+#endif // defined(__CUDA_ARCH__)
+
+
+// Maximum with nan propogation
+// To propgate the NANs, the "max" of a two element that contains NaNs should also return a NaN 
+template <typename T>
+struct maximum_with_nan_propogation {
+  CUTLASS_HOST_DEVICE
+  T operator()(T const &lhs, T const &rhs) const {
+#if defined(__CUDA_ARCH__)
+    return lhs > rhs or isnan(lhs) ? lhs : rhs;
+#else
+    return lhs > rhs or std::isnan(lhs) ? lhs : rhs;
+#endif
+  }
+};
+
+template <>
+struct maximum_with_nan_propogation<float> {
+  CUTLASS_HOST_DEVICE
+  float operator()(float const lhs, float const rhs) const {
+    float res;
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+    asm volatile("max.NaN.f32 %0, %1, %2;\n" : "=f"(res) : "f"(lhs), "f"(rhs));
+#elif defined(__CUDA_ARCH__)
+    res = lhs > rhs or isnan(lhs) ? lhs : rhs;
+#else
+    res = lhs > rhs or std::isnan(lhs) ? lhs : rhs;
+#endif
+    return res;
   }
 };
 
@@ -350,6 +444,8 @@ struct red<double>
   void operator()(double *ptr, const double &data)
   {
 #if !defined(__CUDA_ARCH__)
+      CUTLASS_UNUSED(ptr);
+      CUTLASS_UNUSED(data);
 #elif (__CUDA_ARCH__ >= 600)
 
     atomicAdd(ptr, data);
@@ -379,33 +475,14 @@ struct red<half2>
   CUTLASS_DEVICE
   void operator()(half2 *ptr, const half2 &data)
   {
-#if !defined(__CUDA_ARCH__)
-#elif (__CUDA_ARCH__ >= 600)
+#if !defined(__CUDA_ARCH__) || (defined(__CUDA_ARCH__)  && (__CUDA_ARCH__ < 600))
+      CUTLASS_UNUSED(ptr);
+      CUTLASS_UNUSED(data);
+#else
 
     // Vector-2 atomic reduction requires .target sm_60 or higher
     uint32_t word = reinterpret_cast<const uint32_t&>(data);
     asm volatile ("red.gpu.global.add.noftz.f16x2 [%0], %1;\n" : : "l"(ptr), "r"(word));
-
-#else
-
-    // Use CAS loop
-    uint32_t *ptr_int = reinterpret_cast<uint32_t *>(ptr);
-    uint32_t old_int = *ptr_int;
-    uint32_t assumed_int;
-
-    do
-    {
-      half2 old = reinterpret_cast<half2&>(old_int);
-
-      half hi = __hadd(__high2half(old), __high2half(data));
-      half lo = __hadd(__low2half(old), __low2half(data));
-      half2 update = __halves2half2(hi, lo);
-      uint32_t update_int = reinterpret_cast<const uint32_t&>(update);
-
-      assumed_int = old_int;
-      old_int = atomicCAS(ptr_int, assumed_int, update_int);
-
-    } while (assumed_int != old_int);
 
 #endif // (__CUDA_ARCH__ >= 600)
   }

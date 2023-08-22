@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -114,6 +114,8 @@ enum class NumericTypeID {
   kS16,
   kS32,
   kS64,
+  kFE4M3,
+  kFE5M2,
   kF16,
   kBF16, 
   kTF32,
@@ -354,6 +356,9 @@ struct TileDescription {
   /// Minimum compute capability (e.g. 70, 75) of a device eligible to run the operation.
   int maximum_compute_capability;
 
+  /// Describes the shape of a cluster (in blocks)
+  cutlass::gemm::GemmCoord cluster_shape;
+
   //
   // Methods
   //
@@ -364,14 +369,16 @@ struct TileDescription {
     cutlass::gemm::GemmCoord warp_count = cutlass::gemm::GemmCoord(),
     MathInstructionDescription math_instruction = MathInstructionDescription(),
     int minimum_compute_capability = 0,
-    int maximum_compute_capability = 0
+    int maximum_compute_capability = 0,
+    cutlass::gemm::GemmCoord cluster_shape = cutlass::gemm::GemmCoord(1,1,1)
   ):
     threadblock_shape(threadblock_shape), 
     threadblock_stages(threadblock_stages), 
     warp_count(warp_count),
     math_instruction(math_instruction),
     minimum_compute_capability(minimum_compute_capability),
-    maximum_compute_capability(maximum_compute_capability) { }
+    maximum_compute_capability(maximum_compute_capability),
+    cluster_shape(cluster_shape) { }
 
   // Equality operator
   inline
@@ -469,8 +476,11 @@ struct GemmDescription : public OperationDescription {
   /// Describes the B operand
   TensorDescription B;
 
-  /// Describes the source and destination matrices
+  /// Describes the source matrix
   TensorDescription C;
+
+  /// Describes the destination matrix
+  TensorDescription D;
 
   /// Describes the sparse meta matrices
   TensorDescription E;
@@ -496,6 +506,7 @@ struct GemmDescription : public OperationDescription {
     TensorDescription const &A = TensorDescription(),
     TensorDescription const &B = TensorDescription(),
     TensorDescription const &C = TensorDescription(),
+    TensorDescription const &D = TensorDescription(),
     NumericTypeID element_epilogue = NumericTypeID::kInvalid,
     SplitKMode split_k_mode = SplitKMode::kNone,
     ComplexTransform transform_A = ComplexTransform::kNone,
@@ -505,6 +516,7 @@ struct GemmDescription : public OperationDescription {
     A(A),
     B(B),
     C(C),
+    D(D),
     element_epilogue(element_epilogue),
     split_k_mode(split_k_mode),
     transform_A(transform_A),
@@ -513,7 +525,7 @@ struct GemmDescription : public OperationDescription {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// Desciprion for structured sparse GEMMs.
+/// Description for structured sparse GEMMs.
 struct SparseGemmDescription : public GemmDescription {
 
   /// Description structure for structured sparse GEMM
@@ -522,13 +534,14 @@ struct SparseGemmDescription : public GemmDescription {
     TensorDescription const &A = TensorDescription(),
     TensorDescription const &B = TensorDescription(),
     TensorDescription const &C = TensorDescription(),
+    TensorDescription const &D = TensorDescription(),
     TensorDescription const &E = TensorDescription(),
     NumericTypeID element_epilogue = NumericTypeID::kInvalid,
     SplitKMode split_k_mode = SplitKMode::kNone,
     ComplexTransform transform_A = ComplexTransform::kNone,
     ComplexTransform transform_B = ComplexTransform::kNone
   ):
-    GemmDescription(gemm_kind, A, B, C, element_epilogue, split_k_mode, transform_A, transform_B)
+    GemmDescription(gemm_kind, A, B, C, D, element_epilogue, split_k_mode, transform_A, transform_B)
      {this->E = E;}
 };
 
@@ -991,6 +1004,9 @@ struct GemmUniversalConfiguration {
 };
 
 struct GemmUniversalArguments {
+  // NOTE: these are replicated for 3.0 interfaces 
+  gemm::GemmCoord problem_size;
+  int batch_count;
 
   void const *A;
   void const *B;
@@ -1001,10 +1017,19 @@ struct GemmUniversalArguments {
   void const *beta;
   ScalarPointerMode pointer_mode;
 
+  // NOTE: these are replicated for 3.0 interfaces
+  int64_t lda;
+  int64_t ldb;
+  int64_t ldc;
+  int64_t ldd;
+
   int64_t batch_stride_A;
   int64_t batch_stride_B;
   int64_t batch_stride_C;
   int64_t batch_stride_D;
+
+  // Needed for some 3.x kernels
+  int sm_count;
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1146,7 +1171,7 @@ struct GemmGroupedArguments {
 // OperationKind: kSparseGemm
 //
 
-/// Computes GEMM assumine one of the inputs has 2:4 structured sparsity.
+/// Computes GEMM assuming one of the inputs has 2:4 structured sparsity.
 struct SparseGemmConfiguration {
 
   GemmUniversalMode mode;
@@ -1173,7 +1198,7 @@ struct SparseGemmArguments {
   void const *B;                    /// pointer to B matrix
   void const *C;                    /// pointer to C matrix
   void *D;                          /// pointer to D matrix
-  void const *E;                    /// pointer to E matric (metadata)
+  void const *E;                    /// pointer to E matrix (metadata)
 
   void const *alpha;                /// pointer to alpha scalar
   void const *beta;                 /// pointer to beta scalar
@@ -1451,7 +1476,7 @@ struct ConvArguments {
   /// pointer to implicit gemm matrix C
   void const *C;
 
-  /// pointer to implicit gemm desitination matrix D
+  /// pointer to implicit gemm destination matrix D
   void *D;
 
   /// Host or device pointer to alpha scalar
@@ -1473,16 +1498,16 @@ struct ConvArguments {
 //
 struct ReductionConfiguration {
 
-  /// Redcution problem size
+  /// Reduction problem size
   MatrixCoord problem_size;
 
   /// Number of partitions to reduce
   int partitions;
 
-  /// Number of lements between each partition
+  /// Number of elements between each partition
   int64_t partition_stride;
 
-  /// leading dimension of 'w'orksace operand
+  /// leading dimension of 'w'orkspace operand
   int64_t ldw; 
 
   /// leading dimension of 's'ource operand

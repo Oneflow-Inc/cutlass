@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,7 +35,9 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/coord.h"
-
+#include "cutlass/layout/matrix.h"
+#include "cute/layout.hpp"
+#include "cute/arch/copy_sm90_tma.hpp"
 namespace cutlass {
 namespace gemm {
 
@@ -419,6 +421,203 @@ enum class SharedMemoryClearOption {
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// For each cutlass::layout, provides its corresponding cute stride types, 64b by default
+
+template <class L>
+struct TagToStrideA {
+  using type = L;
+};
+
+// Maps to modes [M, K, L]
+template <>
+struct TagToStrideA<layout::RowMajor> {
+  using type = cute::Stride<int64_t, cute::Int<1>, int64_t>;
+  using tag = layout::RowMajor;
+};
+
+// Maps to modes [M, K, L]
+template <>
+struct TagToStrideA<layout::ColumnMajor> {
+  using type = cute::Stride<cute::Int<1>, int64_t, int64_t>;
+  using tag = layout::ColumnMajor;
+};
+
+template <class L>
+struct TagToStrideB {
+  using type = L;
+};
+
+// Maps to modes [N, K, L]
+template <>
+struct TagToStrideB<layout::RowMajor> {
+  using type = cute::Stride<cute::Int<1>, int64_t, int64_t>;
+  using tag = layout::RowMajor;
+};
+
+// Maps to modes [N, K, L]
+template <>
+struct TagToStrideB<layout::ColumnMajor> {
+  using type = cute::Stride<int64_t, cute::Int<1>, int64_t>;
+  using tag = layout::ColumnMajor;
+};
+
+
+// Maps to modes [N, N, L]
+template <class LayoutTag>
+struct TagToStrideC : TagToStrideA<LayoutTag> { };
+
+// Convenience aliases
+template<class LayoutTag>
+using TagToStrideA_t = typename TagToStrideA<LayoutTag>::type;
+
+template<class LayoutTag>
+using TagToStrideB_t = typename TagToStrideB<LayoutTag>::type;
+
+template<class LayoutTag>
+using TagToStrideC_t = typename TagToStrideC<LayoutTag>::type;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// For 2.x compatibility APIs, provide stride->layout tag mappers
+
+namespace detail {
+
+template<class Stride>
+constexpr bool
+is_mn_major() {
+  // Account for stride types with and without batch mode and batch modes with static zero stride
+  return cute::is_constant<1, decltype(cute::size<0,0>(Stride{}))>::value;
+}
+
+// Note : This method can be used for deducing the Layout Tag of A, C, D Matrices
+template<class StrideAC>
+constexpr
+auto
+stride_to_layout_tag_A() {
+  if constexpr (is_mn_major<StrideAC>()) { // M major
+    return layout::ColumnMajor{};
+  }
+  else { // K major
+    return layout::RowMajor{};
+  }
+
+  CUTE_GCC_UNREACHABLE;
+}
+
+template<class StrideB>
+constexpr
+auto
+stride_to_layout_tag_B() {
+  if constexpr (is_mn_major<StrideB>()) { // N major
+    return layout::RowMajor{};
+  }
+  else { // K major
+    return layout::ColumnMajor{};
+  }
+
+  CUTE_GCC_UNREACHABLE;
+}
+
+// Inspects a TiledCopy and returns its alignment in terms of element count
+template <class GmemTiledCopy, class Element>
+constexpr int
+get_alignment_count_from_gmem_tiled_copy() {
+  if constexpr (cute::is_void_v<GmemTiledCopy>) {
+    return 1;
+  }
+
+  // Account for ElementC = void kernels
+  else if constexpr (cute::is_void_v<Element>) {
+    return 0;
+  }
+
+  else {
+    // For TMA tiled copies, we know the alignment has to be 128 bits
+    if constexpr (   cute::is_base_of_v<cute::SM90_TMA_LOAD,                GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_MULTICAST,      GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_STORE,               GmemTiledCopy>
+                  ) {
+      return 128 / sizeof_bits<Element>::value;
+    }
+    else {
+      // For non-TMA tiled copies, TiledCopy holds the alignment count directly in its TiledShape_MN
+      return GmemTiledCopy::NumValSrc;
+    }
+  }
+}
+
+// Utilities to map Stride back on to their corresponding layout tags
+template <class S>
+struct StrideToLayoutTagA {
+  using type = decltype(detail::stride_to_layout_tag_A<S>());
+};
+
+template <class S>
+struct StrideToLayoutTagB {
+  using type = decltype(detail::stride_to_layout_tag_B<S>());
+};
+
+// Maps to modes [N, N, L]
+template <class S>
+struct StrideToLayoutTagC : StrideToLayoutTagA<S> { };
+
+// Convenience aliases
+template<class S>
+using StrideToLayoutTagA_t = typename StrideToLayoutTagA<S>::type;
+
+template<class S>
+using StrideToLayoutTagB_t = typename StrideToLayoutTagB<S>::type;
+
+template<class S>
+using StrideToLayoutTagC_t = typename StrideToLayoutTagC<S>::type;
+
+template<class Stride>
+constexpr
+bool
+is_k_major() {
+  return ! is_mn_major<Stride>();
+}
+
+template<class LayoutA>
+constexpr bool
+is_mn_major_A() {
+  return is_mn_major<TagToStrideA_t<LayoutA>>();
+}
+
+template<class LayoutB>
+constexpr bool
+is_mn_major_B() {
+  return is_mn_major<TagToStrideB_t<LayoutB>>();
+}
+
+template<class LayoutA>
+constexpr bool
+is_k_major_A() {
+  return is_k_major<TagToStrideA_t<LayoutA>>();
+}
+
+template<class LayoutB>
+constexpr bool
+is_k_major_B() {
+  return is_k_major<TagToStrideB_t<LayoutB>>();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+// The following two metafunctions are used to detect whether a `kernel::Gemm` or `kernel::GemmUniversal`
+// is implementing the CUTLASS 3.x API or not, by checking if the problem shape type is aliased within or not. 
+template <class GemmKernel, class = void>
+struct IsCutlass3GemmKernel : cute::false_type { };
+
+template <typename GemmKernel>
+struct IsCutlass3GemmKernel<GemmKernel, cute::void_t<typename GemmKernel::ProblemShape>>
+    : cute::true_type { };
+
+///////////////////////////////////////////////////////////////////////////////
+
+} // namespace detail
+
+///////////////////////////////////////////////////////////////////////////////
 
 } // namespace gemm
 } // namespace cutlass

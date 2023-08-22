@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,7 +48,18 @@
 
 #include "fmha_grouped_problem_visitor.h"
 #include "gemm_kernel_utils.h"
-#include "epilogue_rescale_output.h"
+#include "gemm/mma_accum_lambda_iterator.h"
+#include "epilogue/epilogue_rescale_output.h"
+
+
+namespace {
+  static CUTLASS_DEVICE float atomicMaxFloat(float* addr, float value) {
+  // source: https://stackoverflow.com/a/51549250
+  return (value >= 0)
+      ? __int_as_float(atomicMax((int*)addr, __float_as_int(value)))
+      : __uint_as_float(atomicMin((unsigned int*)addr, __float_as_uint(value)));
+}
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -128,6 +139,9 @@ public:
   static int const kQueriesPerBlock = ThreadblockShape::kM;
   static int const kKeysPerBlock = ThreadblockShape::kN;
 
+  static constexpr bool kSupportsDropout = false;
+  static constexpr bool kSupportsBias = false;
+
   /// Warp count (concept: GemmShape)
   using WarpCount = typename MM1::WarpCount;
   static int const kThreadsPerWarp = 32;
@@ -168,6 +182,9 @@ public:
     typename LayoutP::Stride::LongIndex *ldv;
     typename LayoutO::Stride::LongIndex *ldo;
 
+    // Scale
+    ElementAccumulator scale;
+
     // Whether causal masking is to be performed
     bool causal;
 
@@ -180,9 +197,9 @@ public:
 
     /// Default ctor
     CUTLASS_HOST_DEVICE
-    Arguments(): 
+    Arguments():
       problem_count(0),
-      threadblock_count(0), 
+      threadblock_count(0),
       ptr_Q(nullptr),
       ptr_K(nullptr),
       ptr_P(nullptr),
@@ -193,6 +210,7 @@ public:
       ldk(nullptr),
       ldv(nullptr),
       ldo(nullptr),
+      scale(0),
       causal(false),
       host_problem_sizes(nullptr)
     {
@@ -201,7 +219,7 @@ public:
 
     /// Ctor
     CUTLASS_HOST_DEVICE
-    Arguments(    
+    Arguments(
       GemmCoord *problem_sizes0,
       GemmCoord *problem_sizes1,
       int problem_count,
@@ -218,8 +236,9 @@ public:
       typename LayoutV::Stride::LongIndex *ldv,
       typename LayoutO::Stride::LongIndex *ldo,
       bool causal,
+      ElementAccumulator scale,
       GemmCoord *host_problem_sizes=nullptr
-    ): 
+    ):
       problem_sizes0(problem_sizes0),
       problem_sizes1(problem_sizes1),
       problem_count(problem_count),
@@ -235,6 +254,7 @@ public:
       ldv(ldv),
       ldo(ldo),
       causal(causal),
+      scale(scale),
       host_problem_sizes(host_problem_sizes)
     {
 
@@ -273,6 +293,7 @@ public:
     typename LayoutP::Stride::LongIndex *ldv;
     typename LayoutO::Stride::LongIndex *ldo;
 
+    ElementAccumulator scale;
     bool causal;
 
     //
@@ -291,7 +312,8 @@ public:
       ldk(nullptr),
       ldv(nullptr),
       ldo(nullptr),
-      causal(false)
+      causal(false),
+      scale(0)
     { }
 
     CUTLASS_HOST_DEVICE
@@ -310,7 +332,8 @@ public:
       ldk(args.ldk),
       ldv(args.ldv),
       ldo(args.ldo),
-      causal(args.causal)
+      causal(args.causal),
+      scale(args.scale)
     { 
 
     }
@@ -337,6 +360,7 @@ public:
       ldv = args.ldv;
       ldo = args.ldo;
       causal = args.causal;
+      scale = args.scale;
     }
   };
 
@@ -464,7 +488,7 @@ public:
   void operator()(Params const &params, SharedStorage &shared_storage) {
     auto& m_prime = shared_storage.m_prime;
     auto& s_prime = shared_storage.s_prime;
-    auto& si = shared_storage.after_mm0.si;
+    [[maybe_unused]] auto& si = shared_storage.after_mm0.si;
     auto& mi = shared_storage.mi;
 
     ProblemVisitor problem_visitor(
@@ -609,10 +633,10 @@ public:
 
         // Mask out last if causal
         if (params.causal && num_keys - iter_key_start <= kKeysPerBlock) {
-          auto lane_offset = MM0::ScalingCoefsUpdater::get_lane_offset(
+          auto lane_offset = MM0::AccumLambdaIterator::get_lane_offset(
               lane_id(), warp_id(), iteratorC_tile_offset);
           int32_t last_col;
-          MM0::ScalingCoefsUpdater::iterateRows(
+          MM0::AccumLambdaIterator::iterateRows(
               lane_offset,
               [&](int accum_m) {
                 last_col = TileParams::query_start(threadblock_idx) + accum_m - iter_key_start;
@@ -631,14 +655,11 @@ public:
                     kFullColumns,
                     ([&] {
                       // Update `mi` from accum stored in registers
-                      // Also updates `accum` with accum[i] <-
-                      // exp(accum[i] * scale
-                      // - mi)
-                      MM0::ScalingCoefsUpdater::update<
-                          kQueriesPerBlock,
+                      // Also does accum[i] <- exp(accum[i] - mi)
+                      iterative_softmax<
+                          typename MM0::Mma::Operator::IteratorC,
                           kFullColumns,
-                          kIsFirst,
-                          kKeepOutputInRF>(
+                          kIsFirst>(
                           accum_o,
                           accum,
                           mi,
@@ -649,7 +670,7 @@ public:
                           warp_id(),
                           num_keys - iter_key_start,
                           iteratorC_tile_offset,
-                          1.0f / cutlass::fast_sqrt(float(problem_size0.k())));
+                          kSupportsBias ? 1.0f : params.scale);
                     }));
               }));
 
@@ -826,6 +847,116 @@ public:
 
       // Next tile
       problem_visitor.advance(gridDim.x);
+    }
+  }
+
+  template <
+      typename WarpIteratorC,
+      bool kFullColumns,
+      bool kIsFirst>
+  CUTLASS_DEVICE static void iterative_softmax(
+      typename WarpIteratorC::Fragment& frag_o, // output so far
+      typename WarpIteratorC::Fragment& frag,
+      cutlass::Array<accum_t, kQueriesPerBlock>& mi,
+      cutlass::Array<accum_t, kQueriesPerBlock>& m_prime,
+      cutlass::Array<accum_t, kQueriesPerBlock>& s_prime,
+      int8_t lane_id,
+      int8_t thread_id,
+      int8_t warp_id,
+      int16_t max_col,
+      typename WarpIteratorC::TensorCoord const& tile_offset,
+      float scaling) {
+    /* Iterates on the accumulator and corresponding position on result matrix
+
+    (1) Update `mi[r]` to the max value of the row `r`
+    (2) In a second iteration do the following:
+        (a) accum   <- exp(accum - mi)
+        (b) m_prime <- exp(m_prime - mi)
+        (c) s_prime <- s_prime * m_prime + sum(accum)
+
+    All of this is done on registers, before we store all of this
+    on shared memory for the next matmul with Value.
+    */
+    using Fragment = typename WarpIteratorC::Fragment;
+    using LambdaIterator = typename DefaultMmaAccumLambdaIterator<
+        WarpIteratorC,
+        accum_t,
+        kThreadsPerWarp>::Iterator;
+    // Convert to `accum_t` (rather than double)
+    constexpr float kLog2e = 1.4426950408889634074; // log_2(e) = M_LOG2E
+    if (!kIsFirst) {
+      if (thread_id < kQueriesPerBlock) {
+        m_prime[thread_id] = mi[thread_id];
+      }
+      __syncthreads();
+    }
+
+    auto lane_offset =
+        LambdaIterator::get_lane_offset(lane_id, warp_id, tile_offset);
+
+    // First update `mi` to the max per-row
+    {
+      accum_t max;
+      LambdaIterator::iterateRows(
+          lane_offset,
+          [&](int accum_m) {
+            max = -cutlass::platform::numeric_limits<accum_t>::infinity();
+          },
+          [&](int accum_m, int accum_n, int idx) {
+            if (kFullColumns || accum_n < max_col) {
+              max = cutlass::fast_max(max, frag[idx]);
+            }
+          },
+          [&](int accum_m) {
+            // Having 4x atomicMax seems faster than reduce within warp
+            // first...
+            atomicMaxFloat(&mi[accum_m], max * scaling);
+          });
+    }
+    frag = cutlass::multiplies<Fragment>()(scaling * kLog2e, frag);
+
+    // Make sure we all share the update values for `mi`
+    __syncthreads();
+
+    if (thread_id < kQueriesPerBlock) {
+      auto m_prime_exp = exp2f(kLog2e * (m_prime[thread_id] - mi[thread_id]));
+      m_prime[thread_id] = m_prime_exp;
+      s_prime[thread_id] *= m_prime_exp;
+    }
+    __syncthreads(); // Update output fragments
+    if (kKeepOutputInRF && !kIsFirst) {
+      accum_t mp;
+      LambdaIterator::iterateRows(
+          lane_offset,
+          [&](int accum_m) { mp = m_prime[accum_m]; },
+          [&](int accum_m, int accum_n, int idx) { frag_o[idx] *= mp; },
+          [&](int accum_m) {});
+      __syncthreads();
+    }
+    // Update accum_m, accum_n, ...
+    {
+      accum_t mi_row, total_row;
+      LambdaIterator::iterateRows(
+          lane_offset,
+          [&](int accum_m) { mi_row = kLog2e * mi[accum_m]; },
+          [&](int accum_m, int accum_n, int idx) {
+            frag[idx] = (kFullColumns || accum_n < max_col)
+                ? exp2f(frag[idx] - mi_row)
+                : accum_t(0.0);
+          },
+          [&](int accum_m) {});
+      LambdaIterator::iterateRows(
+          lane_offset,
+          [&](int accum_m) { total_row = 0.0; },
+          [&](int accum_m, int accum_n, int idx) { total_row += frag[idx]; },
+          [&](int accum_m) {
+            if (LambdaIterator::reduceSameRow(
+                    lane_id, total_row, [](accum_t a, accum_t b) {
+                      return a + b;
+                    })) {
+              atomicAdd(&s_prime[accum_m], total_row);
+            }
+          });
     }
   }
 };

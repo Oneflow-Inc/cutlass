@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -77,7 +77,9 @@ public:
   using LayoutB = typename Mma::IteratorB::Layout;
   using ElementC = typename Epilogue::OutputTileIterator::Element;
   using LayoutC = typename Epilogue::OutputTileIterator::Layout;
-  using ElementAccumulator = typename Mma::ElementC;
+
+  /// The per-thread tile of raw accumulators
+  using AccumulatorTile = typename Mma::FragmentC;
 
   static ComplexTransform const kTransformA = Mma::kTransformA;
   static ComplexTransform const kTransformB = Mma::kTransformB;
@@ -94,21 +96,18 @@ public:
   static int const kAlignmentB = Mma::IteratorB::AccessType::kElements;
   static int const kAlignmentC = Epilogue::OutputTileIterator::kElementsPerAccess;
 
-  /// Number of workspace accumulation elements shared per per block
-  static int const kPeerAccumulators = Epilogue::kPeerAccumulators;
-
-  /// Number of fragments per (thread) accumulator tile
-  static int const kAccumulatorFragments = Epilogue::kAccumulatorFragments;
-
-  /// Number of numeric accumulation elements per fragment
-  static int const kAccumTileElements = sizeof(typename Mma::FragmentC) / sizeof(ElementAccumulator);
-
   /// Warp count (concept: GemmShape)
   using WarpCount = typename Mma::WarpCount;
   static int const kThreadCount = 32 * WarpCount::kCount;
 
+  /// Workspace bytes per thread block
+  static size_t const kWorkspaceBytesPerBlock =
+    __NV_STD_MAX(
+      kThreadCount * sizeof(AccumulatorTile),
+      Epilogue::kWorkspaceBytesPerBlock);
+
   /// Block-striped reduction utility
-  using BlockStripedReduceT = BlockStripedReduce<kThreadCount, typename Mma::FragmentC, ElementAccumulator>;
+  using BlockStripedReduceT = BlockStripedReduce<kThreadCount, AccumulatorTile>;
 
 
 
@@ -125,7 +124,7 @@ public:
 
     GemmUniversalMode mode;
     GemmCoord problem_size;
-    int batch_count;
+    int batch_count;        // Either (mode == GemmUniversalMode::kBatched) the batch count, or (mode == GemmUniversalMode::kGemm) the tile-splitting factor
 
     typename EpilogueOutputOp::Params epilogue;
 
@@ -149,7 +148,7 @@ public:
     typename LayoutC::Stride::LongIndex ldc;
     typename LayoutC::Stride::LongIndex ldd;
 
-    int sm_limit;    /// Carvout override: when the above are defaulted, the number of SMs that dispatch heuristics will attempt to load-balance
+    int avail_sms;          /// The number of SMs that StreamK dispatch heuristics will attempt to load-balance across (-1 defaults to device width, 1 implies classic data-parallel scheduling)
 
 
     //
@@ -160,15 +159,18 @@ public:
     Arguments():
       mode(GemmUniversalMode::kGemm),
       batch_count(1),
-      ptr_A(nullptr), ptr_B(nullptr), ptr_C(nullptr), ptr_D(nullptr),
-      sm_limit(-1)
+      ptr_A(nullptr),
+      ptr_B(nullptr),
+      ptr_C(nullptr),
+      ptr_D(nullptr),
+      avail_sms(-1)
     {}
 
     /// Constructor
     Arguments(
       GemmUniversalMode mode,
       GemmCoord problem_size,
-      int batch_count,
+      int batch_split,                              /// Either (mode == GemmUniversalMode::kBatched) the batch count, or (mode == GemmUniversalMode::kGemm) the tile-splitting factor (1 defaults to StreamK, >1 emulates Split-K)
       typename EpilogueOutputOp::Params epilogue,
       void const * ptr_A,
       void const * ptr_B,
@@ -182,15 +184,15 @@ public:
       typename LayoutB::Stride stride_b,
       typename LayoutC::Stride stride_c,
       typename LayoutC::Stride stride_d,
-      int sm_limit = -1                    /// Carvout override: when the above are defaulted, the number of SMs that dispatch heuristics will attempt to load-balance
+      int avail_sms = -1                            /// The number of SMs that StreamK dispatch heuristics will attempt to load-balance across (-1 defaults to device width, 1 implies classic data-parallel scheduling)
     ):
       mode(mode),
       problem_size(problem_size),
-      batch_count(batch_count),
+      batch_count(batch_split),
       epilogue(epilogue),
       ptr_A(ptr_A), ptr_B(ptr_B), ptr_C(ptr_C), ptr_D(ptr_D),
       batch_stride_A(batch_stride_A), batch_stride_B(batch_stride_B), batch_stride_C(batch_stride_C), batch_stride_D(batch_stride_D),
-      stride_a(stride_a), stride_b(stride_b), stride_c(stride_c), stride_d(stride_d), sm_limit(sm_limit)
+      stride_a(stride_a), stride_b(stride_b), stride_c(stride_c), stride_d(stride_d), avail_sms(avail_sms)
     {
       CUTLASS_TRACE_HOST("GemmUniversalStreamk::Arguments::Arguments() - problem_size: " << problem_size);
     }
@@ -199,7 +201,7 @@ public:
     Arguments(
       GemmUniversalMode mode,
       GemmCoord problem_size,
-      int batch_count,
+      int batch_split,                              /// Either (mode == GemmUniversalMode::kBatched) the batch count, or (mode == GemmUniversalMode::kGemm) the tile-splitting factor (1 defaults to StreamK, >1 emulates Split-K)
       typename EpilogueOutputOp::Params epilogue,
       void const * ptr_A,
       void const * ptr_B,
@@ -213,15 +215,15 @@ public:
       typename LayoutB::Stride::LongIndex ldb,
       typename LayoutC::Stride::LongIndex ldc,
       typename LayoutC::Stride::LongIndex ldd,
-      int sm_limit = -1                    /// Carvout override: when the above are defaulted, the number of SMs that dispatch heuristics will attempt to load-balance
+      int avail_sms = -1                            /// The number of SMs that StreamK dispatch heuristics will attempt to load-balance across (-1 defaults to device width, 1 implies classic data-parallel scheduling)
     ):
       mode(mode),
       problem_size(problem_size),
-      batch_count(batch_count),
+      batch_count(batch_split),
       epilogue(epilogue),
       ptr_A(ptr_A), ptr_B(ptr_B), ptr_C(ptr_C), ptr_D(ptr_D),
       batch_stride_A(batch_stride_A), batch_stride_B(batch_stride_B), batch_stride_C(batch_stride_C), batch_stride_D(batch_stride_D),
-      lda(lda), ldb(ldb), ldc(ldc), ldd(ldd), sm_limit(sm_limit)
+      lda(lda), ldb(ldb), ldc(ldc), ldd(ldd), avail_sms(avail_sms)
     {
       stride_a = make_Coord(lda);
       stride_b = make_Coord(ldb);
@@ -255,28 +257,33 @@ public:
     // Data members
     //
 
-    ThreadblockSwizzle block_mapping;
+    void * ptr_A;
+    void * ptr_B;
 
     typename Mma::IteratorA::Params params_A;
     typename Mma::IteratorB::Params params_B;
-    typename Epilogue::OutputTileIterator::Params params_C;
-    typename Epilogue::OutputTileIterator::Params params_D;
-    typename EpilogueOutputOp::Params output_op;
-
-    GemmUniversalMode mode;
-
-    void * ptr_A;
-    void * ptr_B;
-    void * ptr_C;
-    void * ptr_D;
 
     int64_t batch_stride_A;
     int64_t batch_stride_B;
-    int64_t batch_stride_C;
-    int64_t batch_stride_D;
+
+    GemmUniversalMode mode;
+
+    ThreadblockSwizzle block_mapping;
 
     void *barrier_workspace;
-    ElementAccumulator *partials_workspace;
+    void *partials_workspace;
+
+    typename EpilogueOutputOp::Params output_op;
+
+    void * ptr_D;
+    void * ptr_C;
+
+    typename Epilogue::OutputTileIterator::Params params_D;
+    typename Epilogue::OutputTileIterator::Params params_C;
+
+    int64_t batch_stride_D;
+    int64_t batch_stride_C;
+
 
   protected:
 
@@ -296,7 +303,7 @@ public:
     {
       // For atomic reduction, each SK-block needs a synchronization flag.  For parallel reduction,
       // each reduction block needs its own synchronization flag.
-      int sk_blocks = block_mapping.sk_regions * block_mapping.sk_blocks_per_region;
+      int sk_blocks = block_mapping.sk_regions() * block_mapping.sk_blocks_per_region();
       int num_flags = fast_max(sk_blocks, block_mapping.reduction_blocks);
 
       return cacheline_align_up(sizeof(typename Barrier::T) * num_flags);
@@ -305,11 +312,8 @@ public:
     /// Get the workspace size needed for intermediate partial sums
     size_t get_partials_workspace_size() const
     {
-      // For atomic reduction, each SK-block can share one accumulator tile.  For parallel reduction,
-      // each SK-block can share up to two accumulator tiles.
-      size_t tile_bytes_accumulators = sizeof(ElementAccumulator) * kPeerAccumulators * 2;
-      int sk_blocks = block_mapping.sk_regions * block_mapping.sk_blocks_per_region;
-      return cacheline_align_up(tile_bytes_accumulators * sk_blocks);
+      int sk_blocks = block_mapping.sk_regions() * block_mapping.sk_blocks_per_region();
+      return cacheline_align_up(kWorkspaceBytesPerBlock * sk_blocks);
     }
 
 
@@ -347,9 +351,9 @@ public:
       partials_workspace(nullptr)
     {
       // Number of SMs to make available for StreamK decomposition
-      int avail_sms = (args.sm_limit == -1) ?
+      int avail_sms = (args.avail_sms == -1) ?
                         device_sms :
-                        fast_min(args.sm_limit, device_sms);
+                        fast_min(args.avail_sms, device_sms);
 
       // Initialize the block mapping structure
       block_mapping = ThreadblockSwizzle(
@@ -359,6 +363,7 @@ public:
         {ThreadblockShape::kM, ThreadblockShape::kN, ThreadblockShape::kK},
         args.batch_count,
         sm_occupancy,
+        device_sms,
         avail_sms);
     }
 
@@ -388,7 +393,7 @@ public:
         if (!workspace) {
           return Status::kErrorWorkspaceNull;
         }
-        partials_workspace = reinterpret_cast<ElementAccumulator*>(ptr);
+        partials_workspace = ptr;
         ptr += partials_workspace_bytes;
       }
 
@@ -400,7 +405,7 @@ public:
         if (!workspace) {
           return Status::kErrorWorkspaceNull;
         }
-        barrier_workspace = reinterpret_cast<ElementAccumulator*>(ptr);
+        barrier_workspace = ptr;
         ptr += barrier_workspace_bytes;
       }
 
@@ -430,7 +435,7 @@ public:
     /// Returns the GEMM volume in thread block tiles
     cutlass::gemm::GemmCoord get_tiled_shape() const
     {
-      return block_mapping.tiled_shape;
+      return block_mapping.tiled_shape();
     }
 
 
@@ -449,8 +454,7 @@ public:
     }
 
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     void update(Arguments const &args)
     {
       CUTLASS_TRACE_HOST("GemmUniversalStreamK::Params::update()");
@@ -523,7 +527,7 @@ protected:
   //
 
   /// GEMM problem parameters
-  Params const &params;
+  Params params;
 
   /// Shared storage reference
   SharedStorage &shared_storage;
@@ -536,9 +540,6 @@ protected:
 
   /// ID of each thread within a warp
   int lane_idx;
-
-  /// Block index
-  int block_idx;
 
   /// Threadblock scoped epilogue
   Epilogue epilogue;
@@ -555,7 +556,7 @@ public:
   static Status can_implement(
     cutlass::gemm::GemmCoord const & problem_size)
   {
-    CUTLASS_TRACE_HOST("GemmUniversal::can_implement()");
+    CUTLASS_TRACE_HOST("GemmUniversalStreamk::can_implement()");
 
     static int const kAlignmentA = (platform::is_same<LayoutA,
                                                       layout::ColumnMajorInterleaved<32>>::value)
@@ -630,13 +631,11 @@ public:
     return Status::kSuccess;
   }
 
-
   /// Determines whether the GEMM problem satisfies this kernel's
   /// alignment requirements
   static Status can_implement(Arguments const &args) {
     return can_implement(args.problem_size);
   }
-
 
 protected:
 
@@ -646,16 +645,18 @@ protected:
 
   /// Iterator for fetching tile fragments from A
   CUTLASS_DEVICE
-  typename Mma::IteratorA init_iterator_A(TileWorkDesc &tile_work)
+  typename Mma::IteratorA init_iterator_A(
+    TileWorkDesc &tile_work,
+    GemmUniversalMode mode)
   {
     // The input A matrix
     ElementA *ptr_A = static_cast<ElementA *>(params.ptr_A);
 
     // Update input pointers based on batched/array mode
-    if (params.mode == GemmUniversalMode::kBatched) {
+    if (mode == GemmUniversalMode::kBatched) {
       ptr_A += tile_work.tiled_coord.k() * params.batch_stride_A;
     }
-    if (params.mode == GemmUniversalMode::kArray) {
+    if (mode == GemmUniversalMode::kArray) {
       ptr_A = static_cast<ElementA * const *>(params.ptr_A)[tile_work.tiled_coord.k()];
     }
 
@@ -673,16 +674,18 @@ protected:
 
   /// Iterator for fetching tile fragments from B
   CUTLASS_DEVICE
-  typename Mma::IteratorB init_iterator_B(TileWorkDesc &tile_work)
+  typename Mma::IteratorB init_iterator_B(
+    TileWorkDesc &tile_work,
+    GemmUniversalMode mode)
   {
     // The input B matrix
     ElementB *ptr_B = static_cast<ElementB *>(params.ptr_B);
 
     // Update input pointers based on batched/array mode
-    if (params.mode == GemmUniversalMode::kBatched) {
+    if (mode == GemmUniversalMode::kBatched) {
       ptr_B += tile_work.tiled_coord.k() * params.batch_stride_B;
     }
-    if (params.mode == GemmUniversalMode::kArray) {
+    if (mode == GemmUniversalMode::kArray) {
       ptr_B = static_cast<ElementB * const *>(params.ptr_B)[tile_work.tiled_coord.k()];
     }
 
@@ -706,10 +709,10 @@ protected:
     tile_work.tile_idx = tile_idx;
 
     // The first global-scoped MAC-iteration this threadblock will perform for this tile
-    tile_work.iter_begin = tile_idx * params.block_mapping.iters_per_tile;
+    tile_work.iter_begin = tile_idx * params.block_mapping.iters_per_tile();
 
     // The number of MAC-iterations this threadblock will perform for this tile
-    tile_work.k_iters_remaining = params.block_mapping.iters_per_tile;
+    tile_work.k_iters_remaining = params.block_mapping.iters_per_tile();
 
     // The starting index in the k-domain for MAC-iterations this threadblock will perform for this tile
     tile_work.k_begin = 0;
@@ -733,7 +736,7 @@ protected:
     tile_work.tile_idx = tile_idx;
 
     // The first global-scoped MAC-iteration for this tile
-    int tile_iter_begin = tile_idx * params.block_mapping.iters_per_tile;
+    int tile_iter_begin = tile_idx * params.block_mapping.iters_per_tile();
 
     // The first global-scoped MAC-iteration this threadblock will perform for this tile
     tile_work.iter_begin = max(block_iter_begin, tile_iter_begin);
@@ -762,14 +765,19 @@ protected:
 
   /// Share accumulators with peers
   CUTLASS_DEVICE
-  void share_accumulators(typename Mma::FragmentC const &accumulator_tile, int first_block_idx)
+  void share_accumulators(
+    AccumulatorTile const &accumulator_tile,
+    int block_idx,
+    int first_block_idx)
   {
-    int block_tile_offset = first_block_idx * kPeerAccumulators;
+    AccumulatorTile *accum_tile_workspace = reinterpret_cast<AccumulatorTile *>(params.partials_workspace);
+
+    int accum_tile_offset = first_block_idx * kThreadCount;
 
     if (block_idx == first_block_idx)
     {
       // First peer initializes the workspace partials
-      BlockStripedReduceT::store(params.partials_workspace + block_tile_offset, accumulator_tile, thread_idx);
+      BlockStripedReduceT::store(accum_tile_workspace + accum_tile_offset, accumulator_tile, thread_idx);
     }
     else
     {
@@ -787,7 +795,7 @@ protected:
       }
 
       // Perform reduction in workspace
-      BlockStripedReduceT::reduce(params.partials_workspace + block_tile_offset, accumulator_tile, thread_idx);
+      BlockStripedReduceT::reduce(accum_tile_workspace + accum_tile_offset, accumulator_tile, thread_idx);
     }
 
     // Signal our arrival
@@ -797,17 +805,20 @@ protected:
 
   /// Acquire accumulators from peers
   CUTLASS_DEVICE
-  void acquire_accumulators_atomic(
-    typename Mma::FragmentC &accumulator_tile,
+  void acquire_accumulators(
+    AccumulatorTile &accumulator_tile,
+    int block_idx,
     int first_block_idx)
   {
+    AccumulatorTile *accum_tile_workspace = reinterpret_cast<AccumulatorTile *>(params.partials_workspace);
+
     // Wait for arrival
     int num_carry_in = block_idx - first_block_idx;
     Barrier::wait_eq_reset(params.barrier_workspace, thread_idx, first_block_idx, num_carry_in);
 
     // Load and add peer-partials accumulator tile to local accumulator tile
-    int block_tile_offset = first_block_idx * kPeerAccumulators;
-    BlockStripedReduceT::load_add(accumulator_tile, params.partials_workspace + block_tile_offset, thread_idx);
+    int accum_tile_offset = first_block_idx * kThreadCount;
+    BlockStripedReduceT::load_add(accumulator_tile, accum_tile_workspace + accum_tile_offset, thread_idx);
   }
 
 
@@ -815,7 +826,7 @@ protected:
   CUTLASS_DEVICE
   void do_epilogue(
     TileWorkDesc &tile_work,
-    typename Mma::FragmentC &accumulator_tile)
+    AccumulatorTile &accumulator_tile)
   {
     ElementC *ptr_C = static_cast<ElementC *>(params.ptr_C);
     ElementC *ptr_D = static_cast<ElementC *>(params.ptr_D);
@@ -867,11 +878,11 @@ protected:
     int peer_idx_begin, peer_idx_last, reduce_tile_idx, reduce_fragment_idx;
 
     // Reduce by sk-tile (every tile contributed to by one or more blocks)
-    reduce_tile_idx = reduce_idx / kAccumulatorFragments;
-    reduce_fragment_idx = reduce_idx % kAccumulatorFragments;
+    reduce_tile_idx = reduce_idx / Epilogue::kAccumulatorFragments;
+    reduce_fragment_idx = reduce_idx % Epilogue::kAccumulatorFragments;
 
-    int iter_tile_first = reduce_tile_idx * params.block_mapping.iters_per_tile;
-    int iter_tile_last = iter_tile_first + params.block_mapping.iters_per_tile - 1;
+    int iter_tile_first = reduce_tile_idx * params.block_mapping.iters_per_tile();
+    int iter_tile_last = iter_tile_first + params.block_mapping.iters_per_tile() - 1;
 
     peer_idx_begin = params.block_mapping.get_sk_block_idx(iter_tile_first);
     peer_idx_last = params.block_mapping.get_sk_block_idx(iter_tile_last);
@@ -882,7 +893,7 @@ protected:
     Barrier::wait_eq_reset(
         params.barrier_workspace,
         thread_idx,
-        (reduce_tile_idx * kAccumulatorFragments) + reduce_fragment_idx,
+        (reduce_tile_idx * Epilogue::kAccumulatorFragments) + reduce_fragment_idx,
         num_peers);
 
     /// The location of this tile (in threadblock-tile coordinates) in the output matrix
@@ -896,16 +907,6 @@ protected:
 
     ElementC *ptr_C = static_cast<ElementC *>(params.ptr_C);
     ElementC *ptr_D = static_cast<ElementC *>(params.ptr_D);
-
-    // Update pointers for batched/array mode(s)
-    if (params.mode == GemmUniversalMode::kBatched) {
-      ptr_C += tiled_coord.k() * params.batch_stride_C;
-      ptr_D += tiled_coord.k() * params.batch_stride_D;
-    }
-    if (params.mode == GemmUniversalMode::kArray) {
-      ptr_C = static_cast<ElementC * const *>(params.ptr_C)[tiled_coord.k()];
-      ptr_D = static_cast<ElementC * const *>(params.ptr_D)[tiled_coord.k()];
-    }
 
     // Tile iterator loading from source tensor.
     typename Epilogue::OutputTileIterator iterator_C(
@@ -938,24 +939,26 @@ protected:
   CUTLASS_DEVICE
   void process_tile(
     TileWorkDesc tile_work,
+    int block_idx,
     int dp_start_block_idx,
     int block_iter_begin)
   {
     // Initialize input iterators
-    typename Mma::IteratorA iterator_A = init_iterator_A(tile_work);
-    typename Mma::IteratorB iterator_B = init_iterator_B(tile_work);
+    typename Mma::IteratorA iterator_A = init_iterator_A(tile_work, params.mode);
+    typename Mma::IteratorB iterator_B = init_iterator_B(tile_work, params.mode);
 
     // Initialize accumulators
-    typename Mma::FragmentC accumulator_tile;
+    AccumulatorTile accumulator_tile;
     accumulator_tile.clear();
 
-    // Perform this tile's range of multiply-accumulate (MAC) iterations
+    // Initialize MMA abstraction
     Mma mma(
       shared_storage.main_loop,
       thread_idx,
       warp_idx,
       lane_idx);
 
+    // Perform this tile's range of multiply-accumulate (MAC) iterations
     mma(tile_work.k_iters_remaining, accumulator_tile, iterator_A, iterator_B, accumulator_tile);
 
     if ((ThreadblockSwizzle::kReductionStrategy == ThreadblockSwizzle::kAtomic) ||
@@ -970,7 +973,7 @@ protected:
 
       if (!tile_work.tile_finished(params)) {
         // Non "finishing" SK blocks must share their partial accumulator sums through global scratch workspace
-        share_accumulators(accumulator_tile, first_block_idx);
+        share_accumulators(accumulator_tile, block_idx, first_block_idx);
       }
       else
       {
@@ -978,7 +981,7 @@ protected:
         if (!tile_work.tile_started())
         {
           // A "finishing" SK block must first aggregate its accumulator partial sums with those shared by peer threadblocks
-          acquire_accumulators_atomic(accumulator_tile, first_block_idx);
+          acquire_accumulators(accumulator_tile, block_idx, first_block_idx);
         }
 
         do_epilogue(tile_work, accumulator_tile);
@@ -997,8 +1000,8 @@ protected:
       Barrier::arrive_range_inc(
         params.barrier_workspace,
         thread_idx,
-        tile_work.tile_idx * kAccumulatorFragments,
-        kAccumulatorFragments);
+        tile_work.tile_idx * Epilogue::kAccumulatorFragments,
+        Epilogue::kAccumulatorFragments);
     }
   }
 
@@ -1008,28 +1011,27 @@ protected:
   void gemm()
   {
     // Initialize block's iteration range
-    int tile_idx, block_iter_begin, block_iters_remaining;
+    int tile_idx = 0;
+    int block_iter_begin = 0;
+    int block_iters_remaining = 0;
 
-    int sk_padding_start_block_idx =  params.block_mapping.sk_regions * params.block_mapping.sk_blocks_per_region;
+    int block_idx = params.block_mapping.get_block_idx();
+
+    int sk_padding_start_block_idx =  params.block_mapping.sk_regions() * params.block_mapping.sk_blocks_per_region();
     int dp_start_block_idx = params.block_mapping.sk_waves * params.block_mapping.avail_sms;
     int reduce_start_block_idx = dp_start_block_idx + params.block_mapping.dp_blocks;
     int grid_padding_start_block_idx = reduce_start_block_idx + params.block_mapping.reduction_blocks;
 
-    if (block_idx < sk_padding_start_block_idx)
-    {
-      // This is a SK block
-      int block_iter_end;
-      params.block_mapping.get_iter_extents(block_idx, block_iter_begin, block_iter_end);
-      block_iters_remaining = block_iter_end - block_iter_begin;
+    // Initialize tile work descriptor
+    TileWorkDesc tile_work;
 
-      tile_idx = params.block_mapping.get_sk_tile_idx(block_iter_end - 1);
-    }
-    else if (block_idx < dp_start_block_idx)
-    {
-      // This is a filler block
-      return;
-    }
-    else if (block_idx < reduce_start_block_idx)
+    bool dp_block = (block_idx >= dp_start_block_idx) && (block_idx < reduce_start_block_idx);
+    bool sk_block = (block_idx < sk_padding_start_block_idx);
+    bool reduce_block = (block_idx >= reduce_start_block_idx) &&
+            (block_idx < grid_padding_start_block_idx) &&
+            (ThreadblockSwizzle::kReductionStrategy == ThreadblockSwizzle::kMixed);
+
+    if (dp_block)
     {
       // This is a DP block
       int dp_block_idx = block_idx - dp_start_block_idx;
@@ -1045,20 +1047,37 @@ protected:
           tile_idx += (params.block_mapping.dp_first_wave_tiles - 1) * params.block_mapping.avail_sms;
       }
 
-      block_iter_begin = 0;
-      block_iters_remaining = params.block_mapping.iters_per_tile * tile_allottment;
+      block_iters_remaining = params.block_mapping.iters_per_tile() * tile_allottment;
+
+      init_dp_tile_work(tile_work, tile_idx);
+
+      // DP blocks exit if out of bounds or overlap an SK tile (only possible during cohort rasterization, where dp_first_wave_tiles must be 1)
+      if ((tile_idx < params.block_mapping.sk_tiles) ||
+          (tile_work.tiled_coord.m() >= params.block_mapping.tiled_shape().m()) ||
+          (tile_work.tiled_coord.n() >= params.block_mapping.tiled_shape().n()))
+      {
+        return;
+      }
     }
-    else if ((ThreadblockSwizzle::kReductionStrategy == ThreadblockSwizzle::kMixed) &&
-             (block_idx < grid_padding_start_block_idx))
+    else if (sk_block)
     {
-      // This is a reduction threadblock
-      int reduce_block_idx = block_idx - reduce_start_block_idx;
-      separate_reduction(reduce_block_idx);
-      return;
+      // This is a SK block
+      int block_iter_end;
+      params.block_mapping.get_iter_extents(block_idx, block_iter_begin, block_iter_end);
+      block_iters_remaining = block_iter_end - block_iter_begin;
+
+      tile_idx = params.block_mapping.get_sk_tile_idx(block_iter_end - 1);
+      init_sk_tile_work(tile_work, tile_idx, block_iter_begin, block_iter_begin + block_iters_remaining);
     }
     else
     {
-      // This is a filler block
+      if (reduce_block)
+      {
+        // This is a reduction threadblock
+        int reduce_block_idx = block_idx - reduce_start_block_idx;
+        separate_reduction(reduce_block_idx);
+      }
+
       return;
     }
 
@@ -1066,32 +1085,17 @@ protected:
     CUTLASS_PRAGMA_NO_UNROLL
     while (true)
     {
-      // Initialize tile work descriptor
-      TileWorkDesc tile_work;
-      if (block_idx >= dp_start_block_idx)
-      {
-        init_dp_tile_work(tile_work, tile_idx);
-
-        // DP blocks exit if out of bounds or overlap an SK tile (only possible during cohort rasterization, where dp_first_wave_tiles must be 1)
-        if ((tile_idx < params.block_mapping.sk_tiles) ||
-          (tile_work.tiled_coord.m() >= params.block_mapping.tiled_shape.m()) ||
-          (tile_work.tiled_coord.n() >= params.block_mapping.tiled_shape.n()))
-        {
-          break;
-        }
-      }
-      else
-      {
-        init_sk_tile_work(tile_work, tile_idx, block_iter_begin, block_iter_begin + block_iters_remaining);
-      }
-
       // Perform this block's share of work for this tile
-      process_tile(tile_work, dp_start_block_idx, block_iter_begin);
+      process_tile(
+        tile_work,
+        block_idx,
+        dp_start_block_idx,
+        block_iter_begin);
 
-      // Update remaining work for this block
       block_iters_remaining -= tile_work.k_iters_remaining;
-      if (block_iters_remaining == 0) {
-        // Done
+
+      if (block_iters_remaining == 0)
+      {
         break;
       }
 
@@ -1102,15 +1106,18 @@ protected:
       {
         // DP block consume their tiles at stride
         tile_idx += params.block_mapping.avail_sms;
+        init_dp_tile_work(tile_work, tile_idx);
       }
       else
       {
         // SK blocks consume their tiles in backwards order
         tile_idx--;
+        init_sk_tile_work(tile_work, tile_idx, block_iter_begin, block_iter_begin + block_iters_remaining);
       }
     }
 
   }
+
 
 public:
 
@@ -1140,7 +1147,6 @@ public:
       thread_idx(threadIdx.x),
       warp_idx(__shfl_sync(0xffffffff, threadIdx.x / 32, 0)),   // broadcast the warp_id computed by lane 0 to ensure dependent code
       lane_idx(threadIdx.x % 32),
-      block_idx(params.block_mapping.get_block_idx()),
       epilogue(
         shared_storage.epilogue,
         thread_idx,
@@ -1153,7 +1159,7 @@ public:
   CUTLASS_DEVICE
   void operator()()
   {
-    // Do the GEMM
+    // Generic SK code path
     gemm();
 
   }

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,8 @@
 #include "cutlass/complex.h"
 #include "cutlass/tensor_view.h"
 #include "cutlass/blas3.h"
+
+#include "cutlass/layout/vector.h"
 
 #include "cutlass/util/reference/device/tensor_foreach.h"
 #include "cutlass/util/distribution.h"
@@ -1308,7 +1310,7 @@ void TensorFill(
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// Fills a tensor's digonal with 1 and 0 everywhere else.
+/// Fills a tensor's diagonal with 1 and 0 everywhere else.
 template <
   typename Element,               ///< Element type
   typename Layout>                ///< Layout function
@@ -1646,6 +1648,15 @@ void BlockFillSequential(
   Element v = Element(1),
   Element s = Element(0)) {
 
+  using Layout = layout::PackedVectorLayout;
+  Layout::TensorCoord size(static_cast<Layout::Index>(capacity)); // -Wconversion
+  Layout layout = Layout::packed(size);
+  TensorView<Element, Layout> view(ptr, layout, size);
+
+  Array<Element, Layout::kRank> c;
+  c[0] = v;
+
+  TensorFillLinear(view, c, s);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

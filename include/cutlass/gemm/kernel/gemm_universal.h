@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -36,10 +36,14 @@
 #pragma once
 
 #include "cutlass/cutlass.h"
+
+#include "cutlass/arch/arch.h"
 #include "cutlass/fast_math.h"
 #include "cutlass/matrix_coord.h"
 #include "cutlass/complex.h"
 #include "cutlass/semaphore.h"
+#include "cutlass/gemm/kernel/gemm_universal.hpp"
+
 #include "cutlass/layout/matrix.h"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/kernel/params_universal_base.h"
@@ -59,7 +63,15 @@ template <
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_    ///! Threadblock swizzling function
 >
-struct GemmUniversal {
+class GemmUniversal<
+  Mma_,
+  Epilogue_,
+  ThreadblockSwizzle_,
+  void,
+  // 3.x kernels use the first template argument to define the ProblemShape tuple
+  // We use this invariant to SFINAE dispatch against either the 2.x API or the 3.x API
+  cute::enable_if_t<not cute::is_tuple<Mma_>::value>
+> {
 public:
 
   using Mma = Mma_;
@@ -308,8 +320,7 @@ public:
       ptr_scatter_D_indices(const_cast<int *>(args.ptr_scatter_D_indices))
     {}
 
-    /// Lightweight update given a subset of arguments.  Problem geometry is assumed
-    /// to remain the same.
+    /// Lightweight update given a subset of arguments.
     void update(Arguments const &args)
     {
       CUTLASS_TRACE_HOST("GemmUniversal::Params::update()");
@@ -319,6 +330,11 @@ public:
       ptr_B = const_cast<void *>(args.ptr_B);
       ptr_C = const_cast<void *>(args.ptr_C);
       ptr_D = args.ptr_D;
+
+      batch_stride_A = args.batch_stride_A;
+      batch_stride_B = args.batch_stride_B;
+      batch_stride_C = args.batch_stride_C;
+      this->batch_stride_D = args.batch_stride_D;
 
       ptr_gather_A_indices = const_cast<int *>(args.ptr_gather_A_indices);
       ptr_gather_B_indices = const_cast<int *>(args.ptr_gather_B_indices);
@@ -348,24 +364,24 @@ public:
   {
     CUTLASS_TRACE_HOST("GemmUniversal::can_implement()");
 
-    static int const kAlignmentA = (platform::is_same<LayoutA,
+    static int const kAlignmentA = (cute::is_same<LayoutA,
                                                       layout::ColumnMajorInterleaved<32>>::value)
                                    ? 32
-                                   : (platform::is_same<LayoutA,
+                                   : (cute::is_same<LayoutA,
                                                         layout::ColumnMajorInterleaved<64>>::value)
                                      ? 64
                                      : Mma::IteratorA::AccessType::kElements;
-    static int const kAlignmentB = (platform::is_same<LayoutB,
+    static int const kAlignmentB = (cute::is_same<LayoutB,
                                                       layout::RowMajorInterleaved<32>>::value)
                                    ? 32
-                                   : (platform::is_same<LayoutB,
+                                   : (cute::is_same<LayoutB,
                                                         layout::RowMajorInterleaved<64>>::value)
                                      ? 64
                                      : Mma::IteratorB::AccessType::kElements;
-    static int const kAlignmentC = (platform::is_same<LayoutC,
+    static int const kAlignmentC = (cute::is_same<LayoutC,
                                                       layout::ColumnMajorInterleaved<32>>::value)
                                    ? 32
-                                   : (platform::is_same<LayoutC,
+                                   : (cute::is_same<LayoutC,
                                                         layout::ColumnMajorInterleaved<64>>::value)
                                      ? 64
                                      : Epilogue::OutputTileIterator::kElementsPerAccess;
@@ -374,30 +390,30 @@ public:
     bool isBMisaligned = false;
     bool isCMisaligned = false;
 
-    if (platform::is_same<LayoutA, layout::RowMajor>::value) {
+    if (cute::is_same<LayoutA, layout::RowMajor>::value) {
       isAMisaligned = problem_size.k() % kAlignmentA;
-    } else if (platform::is_same<LayoutA, layout::ColumnMajor>::value) {
+    } else if (cute::is_same<LayoutA, layout::ColumnMajor>::value) {
       isAMisaligned = problem_size.m() % kAlignmentA;
-    } else if (platform::is_same<LayoutA, layout::ColumnMajorInterleaved<32>>::value
-            || platform::is_same<LayoutA, layout::ColumnMajorInterleaved<64>>::value) {
+    } else if (cute::is_same<LayoutA, layout::ColumnMajorInterleaved<32>>::value
+            || cute::is_same<LayoutA, layout::ColumnMajorInterleaved<64>>::value) {
       isAMisaligned = problem_size.k() % kAlignmentA;
     }
 
-    if (platform::is_same<LayoutB, layout::RowMajor>::value) {
+    if (cute::is_same<LayoutB, layout::RowMajor>::value) {
       isBMisaligned = problem_size.n() % kAlignmentB;
-    } else if (platform::is_same<LayoutB, layout::ColumnMajor>::value) {
+    } else if (cute::is_same<LayoutB, layout::ColumnMajor>::value) {
       isBMisaligned = problem_size.k() % kAlignmentB;
-    } else if (platform::is_same<LayoutB, layout::RowMajorInterleaved<32>>::value
-            || platform::is_same<LayoutB, layout::RowMajorInterleaved<64>>::value) {
+    } else if (cute::is_same<LayoutB, layout::RowMajorInterleaved<32>>::value
+            || cute::is_same<LayoutB, layout::RowMajorInterleaved<64>>::value) {
       isBMisaligned = problem_size.k() % kAlignmentB;
     }
 
-    if (platform::is_same<LayoutC, layout::RowMajor>::value) {
+    if (cute::is_same<LayoutC, layout::RowMajor>::value) {
       isCMisaligned = problem_size.n() % kAlignmentC;
-    } else if (platform::is_same<LayoutC, layout::ColumnMajor>::value) {
+    } else if (cute::is_same<LayoutC, layout::ColumnMajor>::value) {
       isCMisaligned = problem_size.m() % kAlignmentC;
-    } else if (platform::is_same<LayoutC, layout::ColumnMajorInterleaved<32>>::value
-            || platform::is_same<LayoutC, layout::ColumnMajorInterleaved<64>>::value) {
+    } else if (cute::is_same<LayoutC, layout::ColumnMajorInterleaved<32>>::value
+            || cute::is_same<LayoutC, layout::ColumnMajorInterleaved<64>>::value) {
       isCMisaligned = problem_size.n() % kAlignmentC;
     }
 
@@ -526,7 +542,7 @@ public:
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
-    int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+    int warp_idx = canonical_warp_idx();
 
     int lane_idx = threadIdx.x % 32;
 

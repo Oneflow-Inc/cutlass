@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -198,7 +198,7 @@ private:
   /// A thread's starting column
   Index thread_start_column_;
 
-  /// Initial thread ouput location
+  /// Initial thread output location
   int thread_start_n_, thread_start_p_, thread_start_q_;
 
   /// Current threadblock tile index

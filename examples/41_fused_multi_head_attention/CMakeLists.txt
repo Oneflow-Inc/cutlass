@@ -1,5 +1,5 @@
 
-# Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -37,8 +37,20 @@ cutlass_example_add_executable(
   fused_multihead_attention_variable_seqlen.cu
   )
 
+cutlass_example_add_executable(
+  41_fused_multi_head_attention_backward
+  fused_multi_head_attention_backward.cu
+  DISABLE_TESTS ON
+  )
+
 
 add_custom_target(41_fused_multi_head_attention
 DEPENDS 41_fused_multi_head_attention_fixed_seqlen
         41_fused_multi_head_attention_variable_seqlen
+        41_fused_multi_head_attention_backward
+)
+
+add_test(
+  NAME ctest_examples_41_fmha_backward_python
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/fmha_backward_test.py $<TARGET_FILE:41_fused_multi_head_attention_backward>
 )

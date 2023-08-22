@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,7 @@
 #
 # Sources for CUTLASS Profiler Tool
 #
-
+cmake_policy(SET CMP0112 NEW)
 set(CUTLASS_TOOLS_PROFILER_SOURCES
   src/main.cpp
   src/cutlass_profiler.cu
@@ -86,6 +86,7 @@ target_link_libraries(
   $<$<BOOL:${CUTLASS_ENABLE_CUBLAS}>:nvidia::cublas>
   $<$<BOOL:${CUTLASS_ENABLE_CUDNN}>:nvidia::cudnn>
   cudart
+  cuda_driver
   )
 
 install(
@@ -106,15 +107,17 @@ set(CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_SYMM   --operation=Symm       --provid
 cutlass_add_executable_tests(
   test_profiler cutlass_profiler
   DEPENDEES test_all
-  TEST_COMMAND_OPTIONS 
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_GEMM
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_CONV2D
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_CONV3D
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_SPGEMM
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_RANK_K
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_RANK_2K
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_TRMM
-    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_SYMM
+  TEST_COMMAND_OPTIONS
+    GEMM
+    CONV2D
+    CONV3D
+    SPGEMM
+    RANK_K
+    RANK_2K
+    TRMM
+    SYMM
+  TEST_COMMAND_OPTIONS_PREFIX
+    CUTLASS_PROFILER_TEST_COMMAND_OPTIONS_
   DISABLE_EXECUTABLE_INSTALL_RULE
   )
 

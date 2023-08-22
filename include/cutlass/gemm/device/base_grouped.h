@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -157,7 +157,7 @@ private:
   static void reorder_array(T* data, const std::vector<size_t>& indices) {
     // For now, simply create a copy of the data and then copy over to the original.
     std::vector<T> copy(indices.size());
-    for (int i = 0; i < indices.size(); ++i) {
+    for (size_t i = 0; i < indices.size(); ++i) {
       copy.at(i) = data[indices[i]];
     }
 
@@ -301,18 +301,19 @@ public:
       return 0;
     }
 
-    result = cudaGetDeviceProperties(&properties, device_idx);
+    int multiprocessor_count;
+    result = cudaDeviceGetAttribute(&multiprocessor_count,
+      cudaDevAttrMultiProcessorCount, device_idx);
     if (result != cudaSuccess) {
-      // Call cudaGetLastError() to clear the error bit
-      result = cudaGetLastError();
-      CUTLASS_TRACE_HOST("  cudaGetDeviceProperties() returned error "
-          << cudaGetErrorString(result));
+      CUTLASS_TRACE_HOST(
+        "  cudaDeviceGetAttribute() returned error "
+        << cudaGetErrorString(result));
       return 0;
     }
 
-    bool override_sm_count = (available_sm_count < 0 || available_sm_count > properties.multiProcessorCount);
+    bool override_sm_count = (available_sm_count < 0 || available_sm_count > multiprocessor_count);
     if (override_sm_count) {
-      available_sm_count = properties.multiProcessorCount;
+      available_sm_count = multiprocessor_count;
     }
 
     int max_active_blocks = maximum_active_blocks();
@@ -342,7 +343,7 @@ public:
     // which are not assigned tiles still need to perform the work of iterating through
     // problem sizes to determine that they have no work to do. This competes for cycles
     // with those threadblocks that are assigned tiles to compute.
-    return min(total_tiles, occupancy_based_block_count);
+    return std::min(total_tiles, occupancy_based_block_count);
   }
 
 
@@ -440,8 +441,6 @@ public:
     cudaError_t result = cudaGetLastError();
 
     if (result != cudaSuccess) {
-      // Call cudaGetLastError() to clear the error bit
-      result = cudaGetLastError();
       CUTLASS_TRACE_HOST("  grid launch failed with error " << cudaGetErrorString(result));
       return Status::kErrorInternal;
     }

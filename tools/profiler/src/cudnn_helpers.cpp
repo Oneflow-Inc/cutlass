@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -243,7 +243,7 @@ Status cudnn_satisfies(
   }
 
   ////////////////////////  Convolution output dimensions p and q ///////////////////////
-  // Cutlass convolutions support arbitrary output dimensions and not constriant by    //
+  // Cutlass convolutions support arbitrary output dimensions and not constrained by   //
   // input, filter, padding, striding, dilation sizes.                                 //
   // cuDNN sets the output dimensions (p, q) using following equations:                //
   //                                                                                   //
@@ -373,7 +373,7 @@ Status cudnn_satisfies(
   }
 
   ////////////////////////  Convolution output dimensions p and q ///////////////////////
-  // Cutlass convolutions support arbitrary output dimensions and not constriant by    //
+  // Cutlass convolutions support arbitrary output dimensions and not constrained by   //
   // input, filter, padding, striding, dilation sizes.                                 //
   // cuDNN sets the output dimensions (p, q) using following equations:                //
   //                                                                                   //

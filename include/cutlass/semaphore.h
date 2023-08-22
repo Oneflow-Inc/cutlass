@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -89,19 +89,16 @@ public:
   /// Waits until the semaphore is equal to the given value
   CUTLASS_DEVICE
   void wait(int status = 0) {
-#if defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
     while( __syncthreads_and(state != status) ) {
       fetch();
     }
 
     __syncthreads();
-#endif
   }
 
   /// Updates the lock with the given result
   CUTLASS_DEVICE
   void release(int status = 0) {
-#if defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__)) || defined(__CUDACC_RTC__)
     __syncthreads();
 
     if (wait_thread) {
@@ -111,7 +108,6 @@ public:
       asm volatile ("st.global.cg.b32 [%0], %1;\n" : : "l"(lock), "r"(status));
       #endif
     }
-#endif
   }
 };
 

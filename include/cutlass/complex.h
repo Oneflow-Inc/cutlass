@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -178,16 +178,6 @@ class complex
   CUTLASS_HOST_DEVICE
   complex(cuDoubleComplex const &z) : _real(static_cast<T>(cuCreal(z))), _imag(static_cast<T>(cuCimag(z))) {}
   #endif
-
-  /// Assignment
-  template<typename A>
-  CUTLASS_HOST_DEVICE
-  complex<T>& operator=(complex<A> const &z)
-  {
-    _real = static_cast<T>(z.real());
-    _imag = static_cast<T>(z.imag());
-    return *this;
-  }
 
   /// Equality operator
   CUTLASS_HOST_DEVICE bool operator==(complex<T> const &rhs) const {

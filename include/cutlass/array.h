@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -455,6 +455,11 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
+  const_iterator begin() const {
+    return cbegin();
+  }
+
+  CUTLASS_HOST_DEVICE
   const_iterator cbegin() const {
     return const_iterator(storage);
   }
@@ -462,6 +467,11 @@ public:
   CUTLASS_HOST_DEVICE
   iterator end() {
     return iterator(reinterpret_cast<pointer>(storage + kStorageElements));
+  }
+
+  CUTLASS_HOST_DEVICE
+  const_iterator end() const {
+    return cend();
   }
 
   CUTLASS_HOST_DEVICE
@@ -475,6 +485,11 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
+  const_reverse_iterator rbegin() const {
+    return crbegin();
+  }
+
+  CUTLASS_HOST_DEVICE
   const_reverse_iterator crbegin() const {
     return const_reverse_iterator(reinterpret_cast<const_pointer>(storage + kStorageElements));
   }
@@ -482,6 +497,11 @@ public:
   CUTLASS_HOST_DEVICE
   reverse_iterator rend() {
     return reverse_iterator(reinterpret_cast<pointer>(storage));
+  }
+
+  CUTLASS_HOST_DEVICE
+  const_reverse_iterator rend() const {
+    return crend();
   }
 
   CUTLASS_HOST_DEVICE
