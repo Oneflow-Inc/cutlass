@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 #include <cmath>
 #include <mutex>
 
@@ -40,15 +47,12 @@ efficient_attention_forward_cutlass(
     bool compute_logsumexp,
     int64_t custom_mask_type,
     c10::optional<double> scale,
-    const c10::optional<at::Tensor>& causal_diagonal,
     const c10::optional<at::Tensor>& seqlen_k) {
 #ifdef XFORMERS_MEM_EFF_ATTENTION_DISABLE_FORWARD
   TORCH_CHECK(
       false,
       "MemoryEfficient build has been disabled at build time with -DXFORMERS_MEM_EFF_ATTENTION_DISABLE_FORWARD");
 #else
-  at::globalContext().alertNotDeterministic(
-      "efficient_attention_forward_cutlass");
 
   TORCH_CHECK(query.dim() == 4);
   TORCH_CHECK(key.dim() == 4);
@@ -137,8 +141,8 @@ efficient_attention_forward_cutlass(
     if (!Kernel::kSupportsBias && bias.has_value()) {
       return;
     }
-    if (Kernel::kSingleValueIteration &&
-        Kernel::kKeysPerBlock < value.size(3)) {
+
+    if (value.size(3) > Kernel::kMaxK || key.size(3) > Kernel::kMaxK) {
       return;
     }
     // Alignment
@@ -201,12 +205,6 @@ efficient_attention_forward_cutlass(
     p.num_keys = max_seqlen_k;
     p.num_batches = seqstart_q.has_value() ? seqstart_q->size(0) - 1 : B;
     p.custom_mask_type = custom_mask_type;
-    p.causal_diagonal_ptr = nullptr;
-    if (causal_diagonal.has_value()) {
-      CHECK_NOSPARSE_LASTCONTIGUOUS_CUDA(causal_diagonal.value());
-      TORCH_CHECK(causal_diagonal->scalar_type() == at::ScalarType::Int);
-      p.causal_diagonal_ptr = (int32_t*)causal_diagonal->data_ptr();
-    }
 
     p.seqlen_k_ptr = nullptr;
     if (seqlen_k.has_value()) {
@@ -239,13 +237,25 @@ efficient_attention_forward_cutlass(
           "invalid dtype for bias - should match query's dtype");
       p.attn_bias_ptr = (scalar_t*)bias->data_ptr();
 
-      // assign strides for bias, viewed as
-      // (batch_sz, n_heads, n_queries, n_keys)
-      const at::Tensor bias_4d_view =
-          get_bias_4d_view(*bias, B, num_heads, M, N);
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideB, bias_4d_view.stride(0));
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideH, bias_4d_view.stride(1));
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideM, bias_4d_view.stride(2));
+      TORCH_CHECK(bias->dim() == 4, "Bias expected in BMHK format");
+      TORCH_CHECK(
+          bias->size(0) == query.size(0),
+          "attn_bias: wrong shape (batch dimension)");
+      TORCH_CHECK(
+          bias->size(1) == query.size(2),
+          "attn_bias: wrong shape (head dimension)");
+      TORCH_CHECK(
+          bias->size(2) == query.size(1),
+          "attn_bias: wrong shape (seqlenQ dimension)");
+      TORCH_CHECK(
+          bias->size(3) == key.size(1),
+          "attn_bias: wrong shape (seqlenKV dimension)");
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideB, bias->stride(0));
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideH, bias->stride(1));
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideM, bias->stride(2));
+      TORCH_CHECK(
+          bias->stride(3) == 1,
+          "attn_bias: wrong alignment (last dimension must be contiguous)");
     }
 
     p.use_dropout = use_dropout;
@@ -286,10 +296,52 @@ efficient_attention_forward_cutlass(
   return std::make_tuple(res, logsumexp, seed, offset);
 #endif
 }
+
+// For testing in xFormers
+bool has_cutlassF_kernel_for(
+    at::ScalarType dtype,
+    int64_t cc,
+    int64_t maxShmem,
+    int64_t dim_k) {
+  bool found = false;
+
+  auto callback = [&](auto kernelCls, auto kernelFn) {
+    using Kernel = decltype(kernelCls);
+
+    if (found) {
+      return;
+    }
+    if (dim_k > Kernel::kMaxK) {
+      return;
+    }
+    size_t smem_bytes = sizeof(typename Kernel::SharedStorage);
+    if (smem_bytes > maxShmem) {
+      return;
+    }
+    found = true;
+  };
+  if (dtype == at::ScalarType::Float) {
+    dispatch_cutlassF<float>(callback, cc);
+  } else if (dtype == at::ScalarType::Half) {
+    dispatch_cutlassF<cutlass::half_t>(callback, cc);
+  } else {
+    TORCH_CHECK(dtype == at::ScalarType::BFloat16, "invalid data type");
+    dispatch_cutlassF<cutlass::bfloat16_t>(callback, cc);
+  }
+  return found;
+}
 } // namespace
 
 TORCH_LIBRARY_IMPL(xformers, CUDA, m) {
   m.impl(
       TORCH_SELECTIVE_NAME("xformers::efficient_attention_forward_cutlass"),
       TORCH_FN(efficient_attention_forward_cutlass));
+}
+
+TORCH_LIBRARY_FRAGMENT(xformers, m) {
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "xformers::_has_cutlassF_kernel_for(ScalarType dtype, int cc, int maxShmem, int maxK) -> bool"));
+  m.impl(
+      TORCH_SELECTIVE_NAME("xformers::_has_cutlassF_kernel_for"),
+      TORCH_FN(has_cutlassF_kernel_for));
 }

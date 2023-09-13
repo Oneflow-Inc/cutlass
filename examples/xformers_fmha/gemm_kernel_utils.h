@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 #pragma once
 
 #include "cutlass/arch/mma.h"
@@ -197,8 +204,17 @@ struct call_conditional<false, TA, TB> {
 // The cheapest way to do it is just to broadcast it from lane 0
 ////////////////////////////////////////////////////////////////////////////////
 
-CUTLASS_DEVICE int32_t warp_uniform(int32_t value) {
-  return (int32_t)__shfl_sync(0xffffffff, (unsigned)value, 0);
+template <typename T>
+CUTLASS_DEVICE T warp_uniform(T value) {
+  struct {
+    union {
+      T value;
+      uint32_t asInt;
+    };
+  } p;
+  p.value = value;
+  p.asInt = __shfl_sync(0xffffffff, (unsigned)p.asInt, 0);
+  return p.value;
 }
 
 template <typename T>

@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 #include <cmath>
 
 #include <ATen/Context.h>
@@ -38,7 +45,10 @@ mem_efficient_attention_backward_cutlass(
     int64_t rng_seed, // seed using for generating random numbers for dropout
     int64_t rng_offset, // offset into random number sequence
     int64_t custom_mask_type,
-    const c10::optional<double> scale) {
+    const c10::optional<double> scale,
+    // how many parallel blocks across the keys dimension. Use `-1` to
+    // determine automatically
+    int64_t num_splits_key) {
 #ifdef XFORMERS_MEM_EFF_ATTENTION_DISABLE_BACKWARD
   TORCH_CHECK(
       false,
@@ -169,6 +179,11 @@ mem_efficient_attention_backward_cutlass(
     if (use_dropout && !Kernel::kApplyDropout) {
       return;
     }
+    if (Kernel::kKeysQueriesAlignedToBlockSize &&
+        (cu_seqlens_q.has_value() || M % Kernel::kBlockSizeI ||
+         N % Kernel::kBlockSizeJ)) {
+      return;
+    }
     // Alignment
     if ((query.stride(2) % Kernel::kMinimumAlignment) ||
         (key.stride(2) % Kernel::kMinimumAlignment) ||
@@ -263,28 +278,32 @@ mem_efficient_attention_backward_cutlass(
 
       p.bias_ptr = (scalar_t*)bias->data_ptr();
 
-      // assign strides for bias, viewed as:
-      // (batch_sz, n_heads, n_queries, n_keys)
-      const at::Tensor bias_4d_view = get_bias_4d_view(*bias, B, nH, M, N);
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideB, bias_4d_view.stride(0));
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideH, bias_4d_view.stride(1));
-      ASSIGN_CHECK_OVERFLOW(p.bias_strideM, bias_4d_view.stride(2));
+      TORCH_CHECK(bias->dim() == 4, "Bias expected in BMHK format");
+      TORCH_CHECK(
+          bias->size(0) == query.size(0),
+          "attn_bias: wrong shape (batch dimension)");
+      TORCH_CHECK(
+          bias->size(1) == query.size(2),
+          "attn_bias: wrong shape (head dimension)");
+      TORCH_CHECK(
+          bias->size(2) == query.size(1),
+          "attn_bias: wrong shape (seqlenQ dimension)");
+      TORCH_CHECK(
+          bias->size(3) == key.size(1),
+          "attn_bias: wrong shape (seqlenKV dimension)");
+      TORCH_CHECK(
+          bias->stride(3) == 1,
+          "attn_bias: wrong alignment (last dimension must be contiguous)");
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideB, bias->stride(0));
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideH, bias->stride(1));
+      ASSIGN_CHECK_OVERFLOW(p.bias_strideM, bias->stride(2));
 
       if (bias_requires_grad) {
         p.grad_bias_ptr = (scalar_t*)grad_bias.data_ptr();
 
-        // assign strides for gB, viewed as
-        // (batch_sz, n_heads, n_queries, n_keys). might have different strides
-        // than B, for example if bias tensor was created with
-        // torch.tensor((B * nH, 1, nK)).expand((B * nH, nQ, nK)),
-        // different values of Q will point to the same memory
-        // locations, meaning bias.stride(1) == 0, while we'd want
-        // grad_bias.stride(1) == nK
-        const at::Tensor grad_bias_4d_view =
-            get_bias_4d_view(grad_bias, B, nH, M, N);
-        ASSIGN_CHECK_OVERFLOW(p.gB_strideB, grad_bias_4d_view.stride(0));
-        ASSIGN_CHECK_OVERFLOW(p.gB_strideH, grad_bias_4d_view.stride(1));
-        ASSIGN_CHECK_OVERFLOW(p.gB_strideM, grad_bias_4d_view.stride(2));
+        ASSIGN_CHECK_OVERFLOW(p.gB_strideB, grad_bias.stride(0));
+        ASSIGN_CHECK_OVERFLOW(p.gB_strideH, grad_bias.stride(1));
+        ASSIGN_CHECK_OVERFLOW(p.gB_strideM, grad_bias.stride(2));
       }
     }
 
@@ -293,11 +312,44 @@ mem_efficient_attention_backward_cutlass(
       p.dropout_prob = dropout_p;
     }
 
+    // Heuristic for finding optimal number of splits
+    auto parallelism_without_split_key =
+        p.getBlocksGrid().x * p.getBlocksGrid().y * p.getBlocksGrid().z;
+    p.num_splits_key = cutlass::ceil_div(p.num_keys, Kernel::kBlockSizeJ);
+    p.num_splits_key = std::max<int64_t>(p.num_splits_key, num_splits_key);
+    if (num_splits_key <
+        1) { // Skip heuristic, if user provided an explicit value
+      // If we already have enough parallelism, split-keys can help
+      // better use L2 cache.
+      // This is negligible when the seqlen is too small tho
+      if (parallelism_without_split_key >= 256 &&
+          p.num_keys <= 2 * Kernel::kBlockSizeJ) {
+        p.num_splits_key = 1;
+      }
+      // Increasing `split_keys` leads to using more gmem for temporary storage
+      // when we need a staging area for gK/gV. let's avoid that
+      if (Kernel::kNeedsAccumGradK || Kernel::kNeedsAccumGradV) {
+        p.num_splits_key = std::min(
+            int(p.num_splits_key), 200 / (p.num_batches * p.num_heads));
+      }
+    }
+    if (!Kernel::kEnableSplitKeys || p.num_splits_key < 1) {
+      p.num_splits_key = 1;
+    }
+    if (at::globalContext().deterministicAlgorithms()) {
+      XFORMERS_CHECK(
+          num_splits_key <= 1,
+          "Using `num_splits_key > 1` makes the algorithm non-deterministic, and pytorch's deterministic mode is enabled");
+      p.num_splits_key = 1;
+    }
     int64_t size_bytes = p.workspace_size();
     if (size_bytes) {
       workspace =
           at::empty({size_bytes}, query.options().dtype(at::ScalarType::Byte));
       p.workspace = (float*)workspace.data_ptr();
+      if (p.should_zero_workspace()) {
+        workspace.zero_();
+      }
     }
     Kernel::check_supported(p);
 
@@ -345,10 +397,50 @@ mem_efficient_attention_backward_cutlass(
 #endif
 }
 
+bool has_cutlassB_kernel_for(
+    at::ScalarType dtype,
+    int64_t cc,
+    int64_t maxShmem,
+    int64_t maxK) {
+  bool found = false;
+
+  auto callback = [&](auto kernelCls, auto kernelFn) {
+    using Kernel = decltype(kernelCls);
+
+    if (found) {
+      return;
+    }
+    if (Kernel::kMaxK < maxK) {
+      return;
+    }
+    size_t smem_bytes = sizeof(typename Kernel::SharedStorage);
+    if (smem_bytes > maxShmem) {
+      return;
+    }
+    found = true;
+  };
+  if (dtype == at::ScalarType::Float) {
+    dispatch_cutlassB<float>(callback, cc);
+  } else if (dtype == at::ScalarType::Half) {
+    dispatch_cutlassB<cutlass::half_t>(callback, cc);
+  } else {
+    TORCH_CHECK(dtype == at::ScalarType::BFloat16, "Valid data type");
+    dispatch_cutlassB<cutlass::bfloat16_t>(callback, cc);
+  }
+  return found;
+}
 } // namespace
 
 TORCH_LIBRARY_IMPL(xformers, CUDA, m) {
   m.impl(
       TORCH_SELECTIVE_NAME("xformers::efficient_attention_backward_cutlass"),
       TORCH_FN(mem_efficient_attention_backward_cutlass));
+}
+
+TORCH_LIBRARY_FRAGMENT(xformers, m) {
+  m.def(TORCH_SELECTIVE_SCHEMA(
+      "xformers::_has_cutlassB_kernel_for(ScalarType dtype, int cc, int maxShmem, int maxK) -> bool"));
+  m.impl(
+      TORCH_SELECTIVE_NAME("xformers::_has_cutlassB_kernel_for"),
+      TORCH_FN(has_cutlassB_kernel_for));
 }
