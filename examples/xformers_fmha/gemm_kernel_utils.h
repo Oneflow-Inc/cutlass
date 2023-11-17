@@ -155,19 +155,34 @@ struct DefaultGemmType<
   using Operator = cutlass::arch::OpMultiplyAddFastF32;
 };
 
-// Specialization for tensorcores with f16/bf16 - Sm75+
-template <typename ArchTag, typename scalar_t>
+// Specialization for tensorcores with f16/bf16 - Sm75
+template <typename scalar_t>
 struct DefaultGemmType<
-    ArchTag,
+    cutlass::arch::Sm75,
     scalar_t,
     typename cutlass::platform::enable_if<
-        ArchTag::kMinComputeCapability >= 75 &&
         cutlass::sizeof_bits<scalar_t>::value == 16>::type> {
   static constexpr int ThreadK = 32;
   static constexpr int WarpK = 32;
   static constexpr int kMinimumAlignment = 4;
   using OpClass = cutlass::arch::OpClassTensorOp;
   using InstructionShape = cutlass::gemm::GemmShape<16, 8, 8>;
+  using Operator = cutlass::arch::OpMultiplyAdd;
+};
+
+// Specialization for tensorcores with f16/bf16 - Sm80+
+template <typename ArchTag, typename scalar_t>
+struct DefaultGemmType<
+    ArchTag,
+    scalar_t,
+    typename cutlass::platform::enable_if<
+        ArchTag::kMinComputeCapability >= 80 &&
+        cutlass::sizeof_bits<scalar_t>::value == 16>::type> {
+  static constexpr int ThreadK = 32;
+  static constexpr int WarpK = 32;
+  static constexpr int kMinimumAlignment = 4;
+  using OpClass = cutlass::arch::OpClassTensorOp;
+  using InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;
   using Operator = cutlass::arch::OpMultiplyAdd;
 };
 
