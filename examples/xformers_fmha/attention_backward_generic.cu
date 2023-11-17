@@ -48,15 +48,13 @@ mem_efficient_attention_backward_cutlass(
     const c10::optional<double> scale,
     // how many parallel blocks across the keys dimension. Use `-1` to
     // determine automatically
-    int64_t num_splits_key) {
+    int64_t num_splits_key,
+    const c10::optional<int64_t> window_size) {
 #ifdef XFORMERS_MEM_EFF_ATTENTION_DISABLE_BACKWARD
   TORCH_CHECK(
       false,
       "MemoryEfficient build has been disabled at build time with -DXFORMERS_MEM_EFF_ATTENTION_DISABLE_BACKWARD");
 #else
-  at::globalContext().alertNotDeterministic(
-      "mem_efficient_attention_backward_cutlass");
-
   // ndim
   TORCH_CHECK(query.dim() == grad_out_.dim());
   TORCH_CHECK(query.dim() == key.dim());
@@ -238,6 +236,10 @@ mem_efficient_attention_backward_cutlass(
       p.cu_seqlens_k_ptr = (int32_t*)cu_seqlens_k->data_ptr();
     }
 
+    if (window_size.has_value()) {
+      p.window_size = *window_size;
+    }
+
     ASSIGN_CHECK_OVERFLOW(p.lse_strideB, logsumexp.stride(0));
     ASSIGN_CHECK_OVERFLOW(p.lse_strideH, logsumexp.stride(1));
     ASSIGN_CHECK_OVERFLOW(p.gO_strideB, grad_out.stride(0));
@@ -350,6 +352,15 @@ mem_efficient_attention_backward_cutlass(
       if (p.should_zero_workspace()) {
         workspace.zero_();
       }
+    }
+
+    // Handle the edge-cases where some tensors are empty
+    if (p.num_queries == 0 || p.num_keys == 0 || p.num_batches == 0 ||
+        p.num_heads == 0) {
+      grad_k.zero_();
+      grad_v.zero_();
+      grad_q.zero_();
+      return;
     }
     Kernel::check_supported(p);
 
