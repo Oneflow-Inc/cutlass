@@ -256,9 +256,11 @@ class PredicatedTileAccessIteratorPredicates {
   /// Clears the predicate set efficiently
   CUTLASS_HOST_DEVICE
   void clear_mask(bool enable = true) {
+    if (!enable) return;
+
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < kPredicateWordCount; ++i) {
-      predicates_[i] = enable ? 0u : predicates_[i];
+      predicates_[i] = 0u;
     }
 
   }
